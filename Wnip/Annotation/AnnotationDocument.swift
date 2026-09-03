@@ -33,6 +33,9 @@ struct AnnotationDocument: Equatable, Sendable {
     var nextStepNumber: Int {
         annotations.compactMap { annotation in
             guard case .step(_, let number) = annotation.content else { return nil }
+            if let cropRect, !annotation.bounds.intersects(cropRect) {
+                return nil
+            }
             return number
         }.max().map { $0 + 1 } ?? 1
     }
@@ -63,7 +66,8 @@ struct AnnotationDocument: Equatable, Sendable {
     private mutating func apply(_ command: AnnotationCommand) -> Bool {
         switch command {
         case .add(let annotation):
-            guard !annotations.contains(where: { $0.id == annotation.id }) else { return false }
+            guard annotation.hasRenderableContent,
+                  !annotations.contains(where: { $0.id == annotation.id }) else { return false }
             annotations.append(annotation)
         case .move(let id, let offset):
             guard offset != .zero,

@@ -21,6 +21,13 @@ final class AnnotationDocumentTests: XCTestCase {
         }
     }
 
+    func testOnlyStrokeToolsExposeLineWidthControl() {
+        XCTAssertEqual(
+            AnnotationTool.allCases.filter { $0.usesLineWidth },
+            [.rectangle, .ellipse, .line, .arrow, .pen, .mosaic, .highlight]
+        )
+    }
+
     func testHitTestReturnsTopmostAnnotationContainingPoint() {
         let bottom = Annotation(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
@@ -51,6 +58,29 @@ final class AnnotationDocumentTests: XCTestCase {
 
         XCTAssertEqual(document.hitTest(CGPoint(x: 31, y: 29), tolerance: 3)?.id, line.id)
         XCTAssertNil(document.hitTest(CGPoint(x: 10, y: 50), tolerance: 3))
+    }
+
+    func testArrowheadUsesSameGeometryForBoundsAndHitTesting() {
+        let arrow = Annotation(
+            content: .arrow(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 40, y: 0)),
+            parameters: .init(color: .red, lineWidth: 2, fontSize: 18)
+        )
+        var document = AnnotationDocument()
+        document.perform(.add(arrow))
+        let pointOnArrowhead = CGPoint(x: 31, y: 5)
+
+        XCTAssertTrue(arrow.bounds.contains(pointOnArrowhead))
+        XCTAssertEqual(document.hitTest(pointOnArrowhead, tolerance: 1)?.id, arrow.id)
+    }
+
+    func testWideTextBoundsUseRenderedFontMeasurement() {
+        let annotation = Annotation(
+            content: .text(origin: CGPoint(x: 10, y: 20), value: "WWWW"),
+            parameters: .init(color: .red, lineWidth: 3, fontSize: 20)
+        )
+
+        XCTAssertGreaterThan(annotation.bounds.width, 65)
+        XCTAssertTrue(annotation.contains(CGPoint(x: 70, y: 30), tolerance: 0))
     }
 
     func testUndoAddRemovesAddedAnnotation() {
@@ -113,6 +143,70 @@ final class AnnotationDocumentTests: XCTestCase {
         let document = AnnotationDocument(annotations: [step, rectangle])
 
         XCTAssertEqual(document.nextStepNumber, 5)
+    }
+
+    func testStepNumberExcludesCroppedAwayStepsAndUndoRestoresThem() {
+        let visible = Annotation(content: .step(center: CGPoint(x: 20, y: 20), number: 1))
+        let croppedAway = Annotation(content: .step(center: CGPoint(x: 120, y: 20), number: 7))
+        var document = AnnotationDocument(annotations: [visible, croppedAway])
+
+        XCTAssertTrue(document.perform(.crop(CGRect(x: 0, y: 0, width: 50, height: 50))))
+        XCTAssertEqual(document.nextStepNumber, 2)
+
+        XCTAssertTrue(document.undo())
+        XCTAssertEqual(document.nextStepNumber, 8)
+
+        XCTAssertTrue(document.perform(.delete(id: croppedAway.id)))
+        XCTAssertEqual(document.nextStepNumber, 2)
+        XCTAssertTrue(document.undo())
+        XCTAssertEqual(document.nextStepNumber, 8)
+    }
+}
+
+final class AnnotationCanvasTransformTests: XCTestCase {
+    func testCropMapsSourceToCanvasAndCanvasPointersBackToSource() {
+        let transform = AnnotationCanvasTransform(
+            sourceBounds: CGRect(x: 0, y: 0, width: 200, height: 100),
+            cropRect: CGRect(x: 50, y: 20, width: 100, height: 50),
+            canvasSize: CGSize(width: 300, height: 200)
+        )
+
+        XCTAssertEqual(transform.visibleSourceRect, CGRect(x: 50, y: 20, width: 100, height: 50))
+        XCTAssertEqual(transform.canvasPoint(forSourcePoint: CGPoint(x: 50, y: 20)), .zero)
+        XCTAssertEqual(transform.canvasPoint(forSourcePoint: CGPoint(x: 150, y: 70)), CGPoint(x: 300, y: 200))
+        XCTAssertEqual(transform.sourcePoint(forCanvasPoint: CGPoint(x: 150, y: 100)), CGPoint(x: 100, y: 45))
+        XCTAssertEqual(transform.canvasLength(forSourceLength: 2), 7)
+        XCTAssertEqual(
+            transform.canvasRect(forSourceRect: CGRect(x: 75, y: 30, width: 50, height: 20)),
+            CGRect(x: 75, y: 40, width: 150, height: 80)
+        )
+        XCTAssertEqual(
+            transform.sourceImageFrameInCanvas,
+            CGRect(x: -150, y: -80, width: 600, height: 400)
+        )
+    }
+
+    func testTransformConvertsSourceAnnotationGeometryToCanvasGeometry() {
+        let transform = AnnotationCanvasTransform(
+            sourceBounds: CGRect(x: 0, y: 0, width: 200, height: 100),
+            cropRect: CGRect(x: 50, y: 20, width: 100, height: 50),
+            canvasSize: CGSize(width: 300, height: 200)
+        )
+        let source = Annotation(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
+            content: .line(from: CGPoint(x: 75, y: 30), to: CGPoint(x: 125, y: 50)),
+            parameters: AnnotationToolParameters(color: .red, lineWidth: 2, fontSize: 18)
+        )
+
+        let canvas = transform.canvasAnnotation(source)
+
+        XCTAssertEqual(canvas.id, source.id)
+        XCTAssertEqual(
+            canvas.content,
+            .line(from: CGPoint(x: 75, y: 40), to: CGPoint(x: 225, y: 120))
+        )
+        XCTAssertEqual(canvas.parameters.lineWidth, 7)
+        XCTAssertEqual(canvas.parameters.fontSize, 63)
     }
 }
 
@@ -197,6 +291,7 @@ final class AnnotationCanvasInteractionTests: XCTestCase {
     func testDraggingExistingAnnotationCommitsMoveOnlyOnMouseUp() {
         let annotation = Annotation(content: .rectangle(CGRect(x: 10, y: 10, width: 30, height: 20)))
         let model = AnnotationCanvasModel(document: AnnotationDocument(annotations: [annotation]))
+        model.selectForMoving()
 
         model.pointerDown(at: CGPoint(x: 20, y: 20))
         model.pointerDragged(to: CGPoint(x: 28, y: 16))
@@ -215,6 +310,118 @@ final class AnnotationCanvasInteractionTests: XCTestCase {
         )
         XCTAssertTrue(model.undo())
         XCTAssertEqual(model.document.annotations, [annotation])
+    }
+
+    func testDrawingToolCreatesOverlappingAnnotationInsteadOfMovingExistingOne() {
+        let existing = Annotation(content: .rectangle(CGRect(x: 0, y: 0, width: 100, height: 100)))
+        let model = AnnotationCanvasModel(document: AnnotationDocument(annotations: [existing]))
+        model.selectTool(.ellipse)
+
+        model.pointerDown(at: CGPoint(x: 20, y: 30))
+        model.pointerDragged(to: CGPoint(x: 60, y: 70))
+        model.pointerUp(at: CGPoint(x: 60, y: 70))
+
+        XCTAssertEqual(model.document.annotations.map(\.content), [
+            .rectangle(CGRect(x: 0, y: 0, width: 100, height: 100)),
+            .ellipse(CGRect(x: 20, y: 30, width: 40, height: 40))
+        ])
+    }
+
+    func testGestureLifecycleKeepsFirstNonzeroAndReturnToOriginFreehandSamples() {
+        let model = AnnotationCanvasModel()
+        model.selectTool(.pen)
+        let start = CGPoint(x: 10, y: 10)
+
+        model.gestureChanged(startLocation: start, location: CGPoint(x: 20, y: 15))
+        model.gestureChanged(startLocation: start, location: start)
+        model.gestureChanged(startLocation: start, location: CGPoint(x: 30, y: 25))
+        model.gestureEnded(startLocation: start, location: CGPoint(x: 35, y: 30))
+
+        XCTAssertEqual(model.document.annotations.map(\.content), [
+            .pen([
+                start,
+                CGPoint(x: 20, y: 15),
+                start,
+                CGPoint(x: 30, y: 25),
+                CGPoint(x: 35, y: 30)
+            ])
+        ])
+    }
+
+    func testGestureLifecycleDoesNotRestartMoveWhenPointerReturnsToOrigin() {
+        let annotation = Annotation(content: .rectangle(CGRect(x: 10, y: 10, width: 20, height: 20)))
+        let model = AnnotationCanvasModel(document: AnnotationDocument(annotations: [annotation]))
+        model.selectForMoving()
+        let start = CGPoint(x: 15, y: 15)
+
+        model.gestureChanged(startLocation: start, location: CGPoint(x: 25, y: 20))
+        model.gestureChanged(startLocation: start, location: start)
+        model.gestureChanged(startLocation: start, location: CGPoint(x: 35, y: 25))
+        model.gestureEnded(startLocation: start, location: CGPoint(x: 35, y: 25))
+
+        XCTAssertEqual(model.document.annotations.map(\.content), [
+            .rectangle(CGRect(x: 30, y: 20, width: 20, height: 20))
+        ])
+    }
+
+    func testDegenerateGesturesDoNotAddAnnotationsOrUndoHistory() {
+        let tools: [AnnotationTool] = [
+            .rectangle, .ellipse, .line, .arrow, .pen, .mosaic, .highlight
+        ]
+
+        for tool in tools {
+            let model = AnnotationCanvasModel()
+            model.selectTool(tool)
+            let point = CGPoint(x: 20, y: 20)
+
+            model.gestureChanged(startLocation: point, location: point)
+            model.gestureEnded(startLocation: point, location: point)
+
+            XCTAssertEqual(model.document.annotations, [], "Unexpected annotation for \(tool)")
+            XCTAssertFalse(model.undo(), "Unexpected undo history for \(tool)")
+        }
+    }
+
+    func testMoveRenderItemsReplaceCommittedOriginalWithPreview() {
+        let moving = Annotation(content: .rectangle(CGRect(x: 10, y: 10, width: 20, height: 20)))
+        let untouched = Annotation(content: .ellipse(CGRect(x: 60, y: 60, width: 20, height: 20)))
+        let model = AnnotationCanvasModel(document: AnnotationDocument(annotations: [moving, untouched]))
+        model.selectForMoving()
+
+        model.pointerDown(at: CGPoint(x: 15, y: 15))
+        model.pointerDragged(to: CGPoint(x: 25, y: 20))
+
+        XCTAssertEqual(model.renderItems, [
+            AnnotationCanvasRenderItem(annotation: untouched, isPreview: false),
+            AnnotationCanvasRenderItem(
+                annotation: moving.translated(by: CGSize(width: 10, height: 5)),
+                isPreview: true
+            )
+        ])
+    }
+
+    func testCursorUpdatesWhenToolAndModeChangeWhilePointerStaysInside() {
+        let annotation = Annotation(content: .rectangle(CGRect(x: 0, y: 0, width: 30, height: 30)))
+        let model = AnnotationCanvasModel(document: AnnotationDocument(annotations: [annotation]))
+        var state = AnnotationCanvasCursorState()
+
+        state.setPointerInside(true, activeCursor: model.cursorKind)
+        XCTAssertEqual(state.displayedCursor, .crosshair)
+
+        model.selectTool(.text)
+        state.activeCursorChanged(model.cursorKind)
+        XCTAssertEqual(state.displayedCursor, .iBeam)
+
+        model.selectForMoving()
+        state.activeCursorChanged(model.cursorKind)
+        XCTAssertEqual(state.displayedCursor, .openHand)
+
+        model.pointerDown(at: CGPoint(x: 10, y: 10))
+        state.activeCursorChanged(model.cursorKind)
+        XCTAssertEqual(state.displayedCursor, .closedHand)
+
+        state.setPointerInside(false, activeCursor: model.cursorKind)
+        XCTAssertEqual(state.displayedCursor, .arrow)
     }
 
     func testTextToolStartsEditingOnMouseUpAndCommitsEnteredText() {

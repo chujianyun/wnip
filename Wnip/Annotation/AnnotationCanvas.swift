@@ -1,10 +1,140 @@
 import AppKit
 import SwiftUI
 
+struct AnnotationCanvasTransform: Equatable, Sendable {
+    let sourceBounds: CGRect
+    let visibleSourceRect: CGRect
+    let canvasSize: CGSize
+
+    init(sourceBounds: CGRect, cropRect: CGRect?, canvasSize: CGSize) {
+        let sourceBounds = sourceBounds.standardized
+        let requested = cropRect?.standardized.intersection(sourceBounds) ?? sourceBounds
+        self.sourceBounds = sourceBounds
+        self.visibleSourceRect = requested.isNull || requested.isEmpty ? sourceBounds : requested
+        self.canvasSize = CGSize(width: max(1, canvasSize.width), height: max(1, canvasSize.height))
+    }
+
+    var sourceImageFrameInCanvas: CGRect {
+        CGRect(
+            x: -visibleSourceRect.minX * scaleX,
+            y: -visibleSourceRect.minY * scaleY,
+            width: sourceBounds.width * scaleX,
+            height: sourceBounds.height * scaleY
+        )
+    }
+
+    func canvasPoint(forSourcePoint point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: (point.x - visibleSourceRect.minX) * scaleX,
+            y: (point.y - visibleSourceRect.minY) * scaleY
+        )
+    }
+
+    func sourcePoint(forCanvasPoint point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: visibleSourceRect.minX + (point.x / scaleX),
+            y: visibleSourceRect.minY + (point.y / scaleY)
+        )
+    }
+
+    func canvasRect(forSourceRect rect: CGRect) -> CGRect {
+        let rect = rect.standardized
+        let origin = canvasPoint(forSourcePoint: rect.origin)
+        return CGRect(
+            origin: origin,
+            size: CGSize(width: rect.width * scaleX, height: rect.height * scaleY)
+        )
+    }
+
+    func canvasLength(forSourceLength length: CGFloat) -> CGFloat {
+        length * ((scaleX + scaleY) / 2)
+    }
+
+    func canvasAnnotation(_ annotation: Annotation) -> Annotation {
+        let content: AnnotationContent
+        switch annotation.content {
+        case .rectangle(let rect):
+            content = .rectangle(canvasRect(forSourceRect: rect))
+        case .ellipse(let rect):
+            content = .ellipse(canvasRect(forSourceRect: rect))
+        case .line(let start, let end):
+            content = .line(
+                from: canvasPoint(forSourcePoint: start),
+                to: canvasPoint(forSourcePoint: end)
+            )
+        case .arrow(let start, let end):
+            content = .arrow(
+                from: canvasPoint(forSourcePoint: start),
+                to: canvasPoint(forSourcePoint: end)
+            )
+        case .pen(let points):
+            content = .pen(points.map(canvasPoint(forSourcePoint:)))
+        case .mosaic(let points):
+            content = .mosaic(points.map(canvasPoint(forSourcePoint:)))
+        case .text(let origin, let value):
+            content = .text(origin: canvasPoint(forSourcePoint: origin), value: value)
+        case .highlight(let points):
+            content = .highlight(points.map(canvasPoint(forSourcePoint:)))
+        case .step(let center, let number):
+            content = .step(center: canvasPoint(forSourcePoint: center), number: number)
+        }
+        return Annotation(
+            id: annotation.id,
+            content: content,
+            parameters: AnnotationToolParameters(
+                color: annotation.parameters.color,
+                lineWidth: canvasLength(forSourceLength: annotation.parameters.lineWidth),
+                fontSize: canvasLength(forSourceLength: annotation.parameters.fontSize)
+            )
+        )
+    }
+
+    private var scaleX: CGFloat { canvasSize.width / max(1, visibleSourceRect.width) }
+    private var scaleY: CGFloat { canvasSize.height / max(1, visibleSourceRect.height) }
+}
+
+enum AnnotationCanvasInteractionMode: Equatable, Sendable {
+    case drawing(AnnotationTool)
+    case selecting
+}
+
+struct AnnotationCanvasRenderItem: Equatable, Sendable {
+    let annotation: Annotation
+    let isPreview: Bool
+}
+
+enum AnnotationCanvasCursorKind: Equatable, Sendable {
+    case arrow
+    case crosshair
+    case iBeam
+    case openHand
+    case closedHand
+}
+
+struct AnnotationCanvasCursorState: Equatable, Sendable {
+    private(set) var isPointerInside = false
+    private(set) var displayedCursor: AnnotationCanvasCursorKind = .arrow
+
+    mutating func setPointerInside(
+        _ isInside: Bool,
+        activeCursor: AnnotationCanvasCursorKind
+    ) {
+        isPointerInside = isInside
+        displayedCursor = isInside ? activeCursor : .arrow
+    }
+
+    mutating func activeCursorChanged(_ activeCursor: AnnotationCanvasCursorKind) {
+        if isPointerInside {
+            displayedCursor = activeCursor
+        }
+    }
+}
+
 @MainActor
 final class AnnotationCanvasModel: ObservableObject {
     @Published private(set) var document: AnnotationDocument
     @Published private(set) var selectedTool: AnnotationTool
+    @Published private(set) var interactionMode: AnnotationCanvasInteractionMode
     @Published var parameters: AnnotationToolParameters
     @Published private(set) var selectedAnnotationID: UUID?
     @Published private(set) var previewAnnotation: Annotation?
@@ -17,19 +147,30 @@ final class AnnotationCanvasModel: ObservableObject {
     }
 
     private var interaction: Interaction?
+    private var gestureIsActive = false
 
     init(document: AnnotationDocument = AnnotationDocument(), selectedTool: AnnotationTool = .rectangle) {
         self.document = document
         self.selectedTool = selectedTool
+        self.interactionMode = .drawing(selectedTool)
         self.parameters = selectedTool.defaultParameters
     }
 
     func selectTool(_ tool: AnnotationTool) {
         selectedTool = tool
+        interactionMode = .drawing(tool)
         parameters = tool.defaultParameters
         selectedAnnotationID = nil
         previewAnnotation = nil
         interaction = nil
+        gestureIsActive = false
+    }
+
+    func selectForMoving() {
+        interactionMode = .selecting
+        previewAnnotation = nil
+        interaction = nil
+        gestureIsActive = false
     }
 
     @discardableResult
@@ -52,10 +193,18 @@ final class AnnotationCanvasModel: ObservableObject {
     }
 
     func pointerDown(at point: CGPoint) {
-        if let annotation = document.hitTest(point) {
+        if interactionMode == .selecting,
+           let annotation = document.hitTest(point) {
             selectedAnnotationID = annotation.id
             interaction = .moving(id: annotation.id, start: point, original: annotation)
             previewAnnotation = annotation
+            return
+        }
+
+        if interactionMode == .selecting {
+            selectedAnnotationID = nil
+            interaction = nil
+            previewAnnotation = nil
             return
         }
 
@@ -108,6 +257,22 @@ final class AnnotationCanvasModel: ObservableObject {
         }
     }
 
+    func gestureChanged(startLocation: CGPoint, location: CGPoint) {
+        if !gestureIsActive {
+            gestureIsActive = true
+            pointerDown(at: startLocation)
+        }
+        pointerDragged(to: location)
+    }
+
+    func gestureEnded(startLocation: CGPoint, location: CGPoint) {
+        if !gestureIsActive {
+            pointerDown(at: startLocation)
+        }
+        pointerUp(at: location)
+        gestureIsActive = false
+    }
+
     @discardableResult
     func commitText(_ value: String? = nil) -> Bool {
         guard let origin = textEditorOrigin else { return false }
@@ -157,7 +322,42 @@ final class AnnotationCanvasModel: ObservableObject {
     }
 
     var selectedAnnotation: Annotation? {
-        document.annotations.first { $0.id == selectedAnnotationID }
+        if previewAnnotation?.id == selectedAnnotationID {
+            return previewAnnotation
+        }
+        return document.annotations.first { $0.id == selectedAnnotationID }
+    }
+
+    var renderItems: [AnnotationCanvasRenderItem] {
+        let replacedID: UUID?
+        if case .moving(let id, _, _) = interaction {
+            replacedID = id
+        } else {
+            replacedID = nil
+        }
+        var items = document.annotations.compactMap { annotation in
+            annotation.id == replacedID
+                ? nil
+                : AnnotationCanvasRenderItem(annotation: annotation, isPreview: false)
+        }
+        if let previewAnnotation {
+            items.append(AnnotationCanvasRenderItem(annotation: previewAnnotation, isPreview: true))
+        }
+        return items
+    }
+
+    var cursorKind: AnnotationCanvasCursorKind {
+        switch interactionMode {
+        case .drawing(.text):
+            return .iBeam
+        case .drawing:
+            return .crosshair
+        case .selecting:
+            if case .moving = interaction {
+                return .closedHand
+            }
+            return .openHand
+        }
     }
 
     private func makeAnnotation(
@@ -195,45 +395,59 @@ struct AnnotationCanvas: View {
     var sourceImage: NSImage?
 
     @FocusState private var isTextFieldFocused: Bool
+    @State private var cursorState = AnnotationCanvasCursorState()
 
     var body: some View {
         GeometryReader { proxy in
+            let transform = canvasTransform(canvasSize: proxy.size)
             ZStack(alignment: .topLeading) {
                 if let sourceImage {
+                    let imageFrame = transform.sourceImageFrameInCanvas
                     Image(nsImage: sourceImage)
                         .resizable()
-                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .frame(width: imageFrame.width, height: imageFrame.height)
+                        .position(x: imageFrame.midX, y: imageFrame.midY)
                 }
 
                 Canvas { context, _ in
-                    for annotation in model.document.annotations {
-                        draw(annotation, in: &context, isPreview: false)
-                    }
-                    if let preview = model.previewAnnotation {
-                        draw(preview, in: &context, isPreview: true)
+                    for item in model.renderItems {
+                        draw(
+                            transform.canvasAnnotation(item.annotation),
+                            in: &context,
+                            isPreview: item.isPreview
+                        )
                     }
                 }
                 .contentShape(Rectangle())
-                .gesture(canvasDrag)
+                .gesture(canvasDrag(transform: transform))
                 .onHover { inside in
-                    (inside ? cursor(for: model.selectedTool) : NSCursor.arrow).set()
+                    cursorState.setPointerInside(inside, activeCursor: model.cursorKind)
+                    cursorState.displayedCursor.nsCursor.set()
+                }
+                .onChange(of: model.cursorKind) { _, cursor in
+                    cursorState.activeCursorChanged(cursor)
+                    cursorState.displayedCursor.nsCursor.set()
                 }
 
-                if let bounds = model.selectedAnnotation?.bounds {
-                    selectionHandles(for: bounds)
+                if let selectedAnnotation = model.selectedAnnotation {
+                    selectionHandles(for: transform.canvasAnnotation(selectedAnnotation).bounds)
                 }
 
                 if let origin = model.textEditorOrigin {
+                    let canvasOrigin = transform.canvasPoint(forSourcePoint: origin)
+                    let canvasFontSize = transform.canvasLength(
+                        forSourceLength: model.parameters.fontSize
+                    )
                     TextField("Text", text: $model.textDraft)
                         .textFieldStyle(.plain)
-                        .font(.system(size: model.parameters.fontSize))
+                        .font(.system(size: canvasFontSize))
                         .foregroundStyle(model.parameters.color.swiftUIColor)
                         .padding(.horizontal, 4)
-                        .frame(minWidth: 120, minHeight: model.parameters.fontSize * 1.4)
+                        .frame(minWidth: 120, minHeight: canvasFontSize * 1.4)
                         .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 3))
                         .position(
-                            x: origin.x + 60,
-                            y: origin.y + model.parameters.fontSize * 0.7
+                            x: canvasOrigin.x + 60,
+                            y: canvasOrigin.y + canvasFontSize * 0.7
                         )
                         .focused($isTextFieldFocused)
                         .onSubmit { _ = model.commitText() }
@@ -251,29 +465,59 @@ struct AnnotationCanvas: View {
         }
     }
 
-    private var canvasDrag: some Gesture {
+    private func canvasDrag(transform: AnnotationCanvasTransform) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
-                if value.translation == .zero {
-                    model.pointerDown(at: value.startLocation)
-                }
-                model.pointerDragged(to: value.location)
+                model.gestureChanged(
+                    startLocation: transform.sourcePoint(forCanvasPoint: value.startLocation),
+                    location: transform.sourcePoint(forCanvasPoint: value.location)
+                )
             }
             .onEnded { value in
-                model.pointerUp(at: value.location)
+                model.gestureEnded(
+                    startLocation: transform.sourcePoint(forCanvasPoint: value.startLocation),
+                    location: transform.sourcePoint(forCanvasPoint: value.location)
+                )
             }
+    }
+
+    private func canvasTransform(canvasSize: CGSize) -> AnnotationCanvasTransform {
+        let sourceBounds: CGRect
+        if let sourceImage {
+            sourceBounds = CGRect(origin: .zero, size: sourceImage.size)
+        } else if let cropRect = model.document.cropRect {
+            sourceBounds = cropRect
+        } else {
+            sourceBounds = CGRect(origin: .zero, size: canvasSize)
+        }
+        return AnnotationCanvasTransform(
+            sourceBounds: sourceBounds,
+            cropRect: model.document.cropRect,
+            canvasSize: canvasSize
+        )
     }
 
     private var parameterControls: some View {
         HStack(spacing: 8) {
+            Button {
+                model.selectForMoving()
+            } label: {
+                Image(systemName: "cursorarrow")
+                    .foregroundStyle(model.interactionMode == .selecting ? Color.accentColor : .primary)
+            }
+            .buttonStyle(.plain)
+            .help("Select and Move")
+
             ColorPicker("Color", selection: colorBinding, supportsOpacity: true)
                 .labelsHidden()
                 .frame(width: 28)
                 .disabled(model.selectedTool == .mosaic)
 
-            Image(systemName: "lineweight")
-            Slider(value: lineWidthBinding, in: 1...32, step: 1)
-                .frame(width: 90)
+            if model.selectedTool.usesLineWidth {
+                Image(systemName: "lineweight")
+                Slider(value: lineWidthBinding, in: 1...32, step: 1)
+                    .frame(width: 90)
+            }
 
             if model.selectedTool == .text || model.selectedTool == .step {
                 Stepper("\(Int(model.parameters.fontSize)) pt", value: fontSizeBinding, in: 10...72, step: 1)
@@ -356,10 +600,6 @@ struct AnnotationCanvas: View {
         ]
     }
 
-    private func cursor(for tool: AnnotationTool) -> NSCursor {
-        tool == .text ? .iBeam : .crosshair
-    }
-
     private func draw(_ annotation: Annotation, in context: inout GraphicsContext, isPreview: Bool) {
         let opacity = isPreview ? 0.68 : 1
         let color = annotation.parameters.color.swiftUIColor.opacity(opacity)
@@ -377,7 +617,12 @@ struct AnnotationCanvas: View {
         case .line(let start, let end):
             context.stroke(Path.line(from: start, to: end), with: .color(color), style: strokeStyle)
         case .arrow(let start, let end):
-            context.stroke(Path.arrow(from: start, to: end), with: .color(color), style: strokeStyle)
+            let geometry = AnnotationArrowGeometry(
+                start: start,
+                tip: end,
+                lineWidth: annotation.parameters.lineWidth
+            )
+            context.stroke(Path.arrow(geometry), with: .color(color), style: strokeStyle)
         case .pen(let points):
             context.stroke(Path.polyline(points), with: .color(color), style: strokeStyle)
         case .mosaic(let points):
@@ -387,9 +632,10 @@ struct AnnotationCanvas: View {
                 style: StrokeStyle(lineWidth: annotation.parameters.lineWidth, lineCap: .square)
             )
         case .text(let origin, let value):
+            let textOrigin = annotation.textGeometry?.frame.origin ?? origin
             context.draw(
                 Text(value).font(.system(size: annotation.parameters.fontSize)).foregroundStyle(color),
-                at: origin,
+                at: textOrigin,
                 anchor: .topLeading
             )
         case .highlight(let points):
@@ -410,6 +656,18 @@ struct AnnotationCanvas: View {
                 at: center,
                 anchor: .center
             )
+        }
+    }
+}
+
+private extension AnnotationCanvasCursorKind {
+    var nsCursor: NSCursor {
+        switch self {
+        case .arrow: .arrow
+        case .crosshair: .crosshair
+        case .iBeam: .iBeam
+        case .openHand: .openHand
+        case .closedHand: .closedHand
         }
     }
 }
@@ -455,21 +713,12 @@ private extension Path {
         return path
     }
 
-    static func arrow(from start: CGPoint, to end: CGPoint) -> Path {
-        var path = line(from: start, to: end)
-        let angle = atan2(end.y - start.y, end.x - start.x)
-        let length: CGFloat = 12
-        let spread: CGFloat = .pi / 6
-        path.move(to: end)
-        path.addLine(to: CGPoint(
-            x: end.x - length * cos(angle - spread),
-            y: end.y - length * sin(angle - spread)
-        ))
-        path.move(to: end)
-        path.addLine(to: CGPoint(
-            x: end.x - length * cos(angle + spread),
-            y: end.y - length * sin(angle + spread)
-        ))
+    static func arrow(_ geometry: AnnotationArrowGeometry) -> Path {
+        var path = line(from: geometry.start, to: geometry.tip)
+        path.move(to: geometry.tip)
+        path.addLine(to: geometry.headA)
+        path.move(to: geometry.tip)
+        path.addLine(to: geometry.headB)
         return path
     }
 }

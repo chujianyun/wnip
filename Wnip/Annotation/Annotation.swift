@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import Foundation
 
 struct AnnotationColor: Equatable, Sendable {
@@ -44,6 +45,10 @@ enum AnnotationTool: String, CaseIterable, Equatable, Sendable {
         default:
             AnnotationToolParameters(color: .red, lineWidth: 3, fontSize: 18)
         }
+    }
+
+    var usesLineWidth: Bool {
+        self != .text && self != .step
     }
 }
 
@@ -97,6 +102,68 @@ enum AnnotationContent: Equatable, Sendable {
     }
 }
 
+struct AnnotationArrowGeometry: Equatable, Sendable {
+    let start: CGPoint
+    let tip: CGPoint
+    let headA: CGPoint
+    let headB: CGPoint
+
+    init(start: CGPoint, tip: CGPoint, lineWidth: CGFloat) {
+        self.start = start
+        self.tip = tip
+        let angle = atan2(tip.y - start.y, tip.x - start.x)
+        let length = max(12, lineWidth * 4)
+        let spread = CGFloat.pi / 6
+        headA = CGPoint(
+            x: tip.x - length * cos(angle - spread),
+            y: tip.y - length * sin(angle - spread)
+        )
+        headB = CGPoint(
+            x: tip.x - length * cos(angle + spread),
+            y: tip.y - length * sin(angle + spread)
+        )
+    }
+
+    func bounds(lineWidth: CGFloat) -> CGRect {
+        let points = [start, tip, headA, headB]
+        let minX = points.map(\.x).min() ?? 0
+        let maxX = points.map(\.x).max() ?? 0
+        let minY = points.map(\.y).min() ?? 0
+        let maxY = points.map(\.y).max() ?? 0
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+            .insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
+    }
+
+    func contains(_ point: CGPoint, radius: CGFloat) -> Bool {
+        point.distance(toSegmentFrom: start, to: tip) <= radius ||
+            point.distance(toSegmentFrom: tip, to: headA) <= radius ||
+            point.distance(toSegmentFrom: tip, to: headB) <= radius
+    }
+}
+
+struct AnnotationTextGeometry: Equatable, Sendable {
+    let frame: CGRect
+
+    init(origin: CGPoint, value: String, fontSize: CGFloat) {
+        let font = CTFontCreateUIFontForLanguage(.system, fontSize, nil)
+            ?? CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font
+        ]
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: value, attributes: attributes)
+        )
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        var leading: CGFloat = 0
+        let width = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
+        frame = CGRect(
+            origin: origin,
+            size: CGSize(width: ceil(width), height: ceil(ascent + descent + leading))
+        )
+    }
+}
+
 struct Annotation: Identifiable, Equatable, Sendable {
     let id: UUID
     let content: AnnotationContent
@@ -114,17 +181,46 @@ struct Annotation: Identifiable, Equatable, Sendable {
 
     var tool: AnnotationTool { content.tool }
 
+    var arrowGeometry: AnnotationArrowGeometry? {
+        guard case .arrow(let start, let tip) = content else { return nil }
+        return AnnotationArrowGeometry(start: start, tip: tip, lineWidth: parameters.lineWidth)
+    }
+
+    var textGeometry: AnnotationTextGeometry? {
+        guard case .text(let origin, let value) = content else { return nil }
+        return AnnotationTextGeometry(origin: origin, value: value, fontSize: parameters.fontSize)
+    }
+
+    var hasRenderableContent: Bool {
+        switch content {
+        case .rectangle(let rect), .ellipse(let rect):
+            let rect = rect.standardized
+            return rect.width > 0 && rect.height > 0
+        case .line(let start, let end), .arrow(let start, let end):
+            return start != end
+        case .pen(let points), .mosaic(let points), .highlight(let points):
+            guard let first = points.first else { return false }
+            return points.dropFirst().contains { $0 != first }
+        case .text(_, let value):
+            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .step:
+            return true
+        }
+    }
+
     var bounds: CGRect {
         switch content {
         case .rectangle(let rect), .ellipse(let rect):
             return rect.standardized
-        case .line(let start, let end), .arrow(let start, let end):
+        case .line(let start, let end):
             return CGRect(
                 x: min(start.x, end.x),
                 y: min(start.y, end.y),
                 width: abs(end.x - start.x),
                 height: abs(end.y - start.y)
             ).insetBy(dx: -parameters.lineWidth / 2, dy: -parameters.lineWidth / 2)
+        case .arrow:
+            return arrowGeometry?.bounds(lineWidth: parameters.lineWidth) ?? .zero
         case .pen(let points), .mosaic(let points), .highlight(let points):
             guard let first = points.first else { return .zero }
             let pointBounds = points.dropFirst().reduce(
@@ -134,13 +230,11 @@ struct Annotation: Identifiable, Equatable, Sendable {
             }
             return pointBounds.insetBy(dx: -parameters.lineWidth / 2, dy: -parameters.lineWidth / 2)
         case .text(let origin, let value):
-            return CGRect(
+            return AnnotationTextGeometry(
                 origin: origin,
-                size: CGSize(
-                    width: max(parameters.fontSize, CGFloat(value.count) * parameters.fontSize * 0.6),
-                    height: parameters.fontSize * 1.25
-                )
-            )
+                value: value,
+                fontSize: parameters.fontSize
+            ).frame
         case .step(let center, _):
             let radius = max(parameters.fontSize * 0.75, 12)
             return CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
@@ -165,19 +259,18 @@ struct Annotation: Identifiable, Equatable, Sendable {
             let dx = (point.x - center.x) / horizontalRadius
             let dy = (point.y - center.y) / verticalRadius
             return (dx * dx) + (dy * dy) <= 1
-        case .line(let start, let end), .arrow(let start, let end):
+        case .line(let start, let end):
             return point.distance(toSegmentFrom: start, to: end) <= radius
+        case .arrow:
+            return arrowGeometry?.contains(point, radius: radius) ?? false
         case .pen(let points), .mosaic(let points), .highlight(let points):
             return points.hitPath(at: point, radius: radius)
         case .text(let origin, let value):
-            let estimatedWidth = max(parameters.fontSize, CGFloat(value.count) * parameters.fontSize * 0.6)
-            let estimatedBounds = CGRect(
-                x: origin.x,
-                y: origin.y,
-                width: estimatedWidth,
-                height: parameters.fontSize * 1.25
-            )
-            return estimatedBounds.insetBy(dx: -radius, dy: -radius).contains(point)
+            return AnnotationTextGeometry(
+                origin: origin,
+                value: value,
+                fontSize: parameters.fontSize
+            ).frame.insetBy(dx: -radius, dy: -radius).contains(point)
         case .step(let center, _):
             return hypot(point.x - center.x, point.y - center.y) <= max(parameters.fontSize * 0.75, 12) + radius
         }
