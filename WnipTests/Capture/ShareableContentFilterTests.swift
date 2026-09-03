@@ -41,13 +41,47 @@ final class ShareableContentFilterTests: XCTestCase {
 
     func testMapsScreenRecordingDenialFromTheAdapterToPermissionFailure() async {
         let adapter = ControlledScreenCaptureKitAdapter(
-            contentError: NSError(domain: SCStreamErrorDomain, code: -3801)
+            contentError: NSError(
+                domain: SCStreamErrorDomain,
+                code: Int(SCStreamError.userDeclined.rawValue)
+            )
         )
         let service = ScreenCaptureService(adapter: adapter)
 
         await XCTAssertThrowsErrorAsync(try await service.availableContent()) { error in
             XCTAssertEqual(error as? CaptureFailure, .permissionDenied)
         }
+    }
+
+    func testCaptureDisplayExcludesEveryWnipWindowAlongsideCallerExclusions() async {
+        let ownVisibleWindow = candidate(id: 10, title: "Wnip overlay", bundleIdentifier: "com.wnip.app")
+        let ownHiddenWindow = candidate(
+            id: 20,
+            title: "Wnip panel",
+            bundleIdentifier: "com.wnip.app",
+            isVisible: false,
+            isOnScreen: false
+        )
+        let otherWindow = candidate(id: 30, title: "Other app")
+        let adapter = ControlledScreenCaptureKitAdapter(
+            content: CaptureContent(displays: [], windows: [ownVisibleWindow, ownHiddenWindow, otherWindow]),
+            displayError: NSError(
+                domain: "CaptureTest",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Expected capture assertion."]
+            )
+        )
+        let service = ScreenCaptureService(adapter: adapter, ownBundleIdentifier: "com.wnip.app")
+        let display = DisplayDescriptor(id: 42, frame: .zero, scale: 2)
+        let callerExcludedWindow = candidate(id: 99, title: "Caller exclusion")
+
+        await XCTAssertThrowsErrorAsync(
+            try await service.captureDisplay(display, excluding: [callerExcludedWindow])
+        ) { error in
+            XCTAssertEqual(error as? CaptureFailure, .captureFailed("Expected capture assertion."))
+        }
+
+        XCTAssertEqual(adapter.displayExclusionIDs, [99, 10, 20])
     }
 
     func testMapsCaptureFailureFromTheAdapterToCaptureFailure() async {
@@ -90,23 +124,31 @@ final class ShareableContentFilterTests: XCTestCase {
 
 @MainActor
 private final class ControlledScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
+    private let content: CaptureContent
     private let contentError: Error?
     private let displayError: Error?
+    private(set) var displayExclusionIDs: [UInt32] = []
 
-    init(contentError: Error? = nil, displayError: Error? = nil) {
+    init(
+        content: CaptureContent = CaptureContent(displays: [], windows: []),
+        contentError: Error? = nil,
+        displayError: Error? = nil
+    ) {
+        self.content = content
         self.contentError = contentError
         self.displayError = displayError
     }
 
     func availableContent() async throws -> CaptureContent {
         if let contentError { throw contentError }
-        return CaptureContent(displays: [], windows: [])
+        return content
     }
 
     func captureDisplay(
         id: UInt32,
         excludingWindowIDs: [UInt32]
     ) async throws -> PixelImage {
+        displayExclusionIDs = excludingWindowIDs
         if let displayError { throw displayError }
         fatalError("The test should not request an image when no display error was configured.")
     }

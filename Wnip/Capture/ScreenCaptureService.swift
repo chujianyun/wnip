@@ -23,14 +23,17 @@ protocol ScreenCaptureKitAdapting: AnyObject {
 final class ScreenCaptureService: ScreenCapturing {
     private let adapter: any ScreenCaptureKitAdapting
     private let contentFilter: ShareableContentFilter
+    private let ownBundleIdentifier: String?
 
     init() {
         self.adapter = ScreenCaptureKitAdapter()
-        self.contentFilter = ShareableContentFilter(ownBundleIdentifier: Bundle.main.bundleIdentifier)
+        self.ownBundleIdentifier = Bundle.main.bundleIdentifier
+        self.contentFilter = ShareableContentFilter(ownBundleIdentifier: ownBundleIdentifier)
     }
 
     init(adapter: any ScreenCaptureKitAdapting, ownBundleIdentifier: String? = Bundle.main.bundleIdentifier) {
         self.adapter = adapter
+        self.ownBundleIdentifier = ownBundleIdentifier
         self.contentFilter = ShareableContentFilter(ownBundleIdentifier: ownBundleIdentifier)
     }
 
@@ -51,9 +54,20 @@ final class ScreenCaptureService: ScreenCapturing {
         excluding windows: [CaptureCandidateWindow]
     ) async throws -> PixelImage {
         do {
+            let content = try await adapter.availableContent()
+            let ownWindowIDs: [UInt32]
+            if let ownBundleIdentifier {
+                ownWindowIDs = content.windows.compactMap { window in
+                    window.bundleIdentifier == ownBundleIdentifier ? window.id : nil
+                }
+            } else {
+                ownWindowIDs = []
+            }
+            var seenIDs = Set<UInt32>()
+            let exclusionIDs = (windows.map(\.id) + ownWindowIDs).filter { seenIDs.insert($0).inserted }
             return try await adapter.captureDisplay(
                 id: display.id,
-                excludingWindowIDs: windows.map(\.id)
+                excludingWindowIDs: exclusionIDs
             )
         } catch {
             throw map(error)
@@ -78,7 +92,8 @@ final class ScreenCaptureService: ScreenCapturing {
         }
 
         let error = error as NSError
-        if error.domain == SCStreamErrorDomain, error.code == -3801 {
+        if error.domain == SCStreamErrorDomain,
+           error.code == Int(SCStreamError.userDeclined.rawValue) {
             return .permissionDenied
         }
         return .captureFailed(error.localizedDescription)
@@ -87,6 +102,12 @@ final class ScreenCaptureService: ScreenCapturing {
 
 @MainActor
 final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
+    private let ownBundleIdentifier: String?
+
+    init(ownBundleIdentifier: String? = Bundle.main.bundleIdentifier) {
+        self.ownBundleIdentifier = ownBundleIdentifier
+    }
+
     func availableContent() async throws -> CaptureContent {
         let content = try await SCShareableContent.current
         return CaptureContent(
@@ -101,7 +122,13 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
             throw ScreenCaptureKitAdapterFailure.unavailable
         }
 
-        let excludedWindows = content.windows.filter { excludingWindowIDs.contains($0.windowID) }
+        let excludedWindowIDs = Set(excludingWindowIDs)
+        let excludedWindows = content.windows.filter { window in
+            let isOwnWindow = ownBundleIdentifier.map {
+                window.owningApplication?.bundleIdentifier == $0
+            } ?? false
+            return excludedWindowIDs.contains(window.windowID) || isOwnWindow
+        }
         let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
         return try await captureImage(using: filter)
     }
