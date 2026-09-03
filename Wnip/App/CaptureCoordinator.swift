@@ -70,7 +70,9 @@ final class CaptureCoordinator: ObservableObject {
 
         captureTask = Task { [weak self] in
             guard let self else { return }
+            guard !Task.isCancelled, currentID == requestID else { return }
             guard permission.isAuthorized() || permission.requestAuthorization() else {
+                guard !Task.isCancelled, currentID == requestID else { return }
                 presentedError = .permissionDenied(permission.privacySettingsURL)
                 return
             }

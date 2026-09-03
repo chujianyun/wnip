@@ -87,6 +87,24 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(overlay.presentations.map(\.mode), [.fullScreen])
     }
 
+    func testReplacementDoesNotPublishCancelledRequestPermissionError() async {
+        let permission = PermissionFake(
+            isAuthorized: false,
+            authorizationRequestResult: { !Task.isCancelled }
+        )
+        let overlay = OverlayFake()
+        let coordinator = makeCoordinator(permission: permission, overlay: overlay)
+
+        coordinator.startCapture(mode: .region)
+        coordinator.startCapture(mode: .fullScreen)
+        await coordinator.waitForPendingCaptureForTesting()
+        await Task.yield()
+
+        XCTAssertNil(coordinator.presentedError)
+        XCTAssertEqual(permission.authorizationRequestCallCount, 1)
+        XCTAssertEqual(overlay.presentations.map(\.mode), [.fullScreen])
+    }
+
     func testStartRegistersPersistedShortcutThatStartsRegionCapture() async {
         let preferences = PreferencesFake(shortcut: HotKeyShortcut(keyCode: 12, modifiers: 3))
         let hotKey = HotKeyFake()
@@ -132,10 +150,18 @@ final class CaptureCoordinatorTests: XCTestCase {
 private final class PermissionFake: ScreenRecordingAuthorizing {
     let privacySettingsURL = URL(string: "https://example.com/privacy")!
     private let authorized: Bool
-    private let authorizationRequestResult: Bool
+    private let authorizationRequestResult: @MainActor () -> Bool
     private(set) var authorizationRequestCallCount = 0
 
     init(isAuthorized: Bool, authorizationRequestResult: Bool) {
+        authorized = isAuthorized
+        self.authorizationRequestResult = { authorizationRequestResult }
+    }
+
+    init(
+        isAuthorized: Bool,
+        authorizationRequestResult: @escaping @MainActor () -> Bool
+    ) {
         authorized = isAuthorized
         self.authorizationRequestResult = authorizationRequestResult
     }
@@ -146,7 +172,7 @@ private final class PermissionFake: ScreenRecordingAuthorizing {
 
     func requestAuthorization() -> Bool {
         authorizationRequestCallCount += 1
-        return authorizationRequestResult
+        return authorizationRequestResult()
     }
 }
 
