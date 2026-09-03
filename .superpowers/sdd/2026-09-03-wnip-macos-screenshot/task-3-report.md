@@ -164,3 +164,55 @@ Final output: `** TEST SUCCEEDED **`; 24 tests executed with 0 failures.
 
 - The same host-only `linkd.autoShortcut` and detached-signature diagnostics
   appeared during Xcode tests. They did not affect the 24 passing tests.
+
+## Review-fix round 2
+
+### RED/GREEN evidence
+
+RED command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS' -only-testing:WnipTests/HotKeyServiceTests
+```
+
+RED output: `** TEST FAILED **`; the new
+`testReleasingRegisteredServiceUnregistersItsShortcut` failed its final active
+shortcut assertion after releasing `HotKeyService`.
+
+GREEN command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS' -only-testing:WnipTests/HotKeyServiceTests
+```
+
+GREEN output: `** TEST SUCCEEDED **`; 4 tests executed with 0 failures,
+including the release/lifecycle regression.
+
+Final command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS'
+```
+
+Final output: `** TEST SUCCEEDED **`; 25 tests executed with 0 failures.
+
+### Changed files and self-review
+
+- `Wnip/System/HotKeyService.swift`: restores lifecycle cleanup. Deinitializing
+  a service with a live registration captures only the registrar and token,
+  then schedules `unregister` on the main actor. Explicit `unregister()` still
+  clears the stored token first, so deinitialization does not schedule a
+  duplicate release after normal cleanup.
+- `WnipTests/System/HotKeyServiceTests.swift`: adds the focused regression
+  test. It registers a shortcut, releases the only service reference, yields
+  to the main actor for the cleanup task, and verifies the injected registrar
+  no longer considers the shortcut active.
+
+The deinitializer neither accesses Carbon mutable state directly nor uses
+`MainActor.assumeIsolated`; the same explicit main-actor hop used for the C
+callback preserves round-one isolation guarantees.
+
+### Concerns
+
+- Host-only `linkd.autoShortcut` and detached-signature diagnostics remained
+  present during tests but did not affect the 25 passing tests.

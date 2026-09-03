@@ -40,6 +40,21 @@ final class HotKeyServiceTests: XCTestCase {
 
         XCTAssertEqual(invocationCount, 1)
     }
+
+    func testReleasingRegisteredServiceUnregistersItsShortcut() async throws {
+        let registrar = RecordingRegistrar()
+        let shortcut = HotKeyShortcut(keyCode: 7, modifiers: 3)
+        var service: HotKeyService? = HotKeyService(registrar: registrar)
+        try service?.register(shortcut)
+        XCTAssertEqual(registrar.activeShortcuts, [shortcut])
+
+        service = nil
+        for _ in 0..<10 where !registrar.activeShortcuts.isEmpty {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(registrar.activeShortcuts.isEmpty)
+    }
 }
 
 @MainActor
