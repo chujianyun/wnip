@@ -68,9 +68,25 @@ final class HotKeyService: HotKeyRegistering {
         self.registrar = registrar
     }
 
-    isolated deinit {
+    // Final release is not an ownership boundary: it can occur away from the
+    // main actor. Owners must use replace(_:with:) or shutdown(_:) when the
+    // registration has to be released before the next operation.
+    deinit {
         guard let registration else { return }
-        registrar.unregister(registration)
+        let registrar = registrar
+        Task { @MainActor in
+            registrar.unregister(registration)
+        }
+    }
+
+    static func replace(_ current: inout HotKeyService?, with replacement: HotKeyService?) {
+        guard current !== replacement else { return }
+        current?.unregister()
+        current = replacement
+    }
+
+    static func shutdown(_ current: inout HotKeyService?) {
+        replace(&current, with: nil)
     }
 
     func register(_ shortcut: HotKeyShortcut) throws {

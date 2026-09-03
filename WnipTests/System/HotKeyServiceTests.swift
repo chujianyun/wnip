@@ -41,28 +41,31 @@ final class HotKeyServiceTests: XCTestCase {
         XCTAssertEqual(invocationCount, 1)
     }
 
-    func testReleasingRegisteredServiceUnregistersItsShortcut() throws {
+    func testShuttingDownOwnedServiceUnregistersBeforeDiscardingIt() throws {
         let registrar = RecordingRegistrar()
         let shortcut = HotKeyShortcut(keyCode: 7, modifiers: 3)
         var service: HotKeyService? = HotKeyService(registrar: registrar)
         try service?.register(shortcut)
         XCTAssertEqual(registrar.activeShortcuts, [shortcut])
 
-        service = nil
+        HotKeyService.shutdown(&service)
 
+        XCTAssertNil(service)
         XCTAssertTrue(registrar.activeShortcuts.isEmpty)
     }
 
-    func testReleasingServiceAllowsImmediateReplacementRegistration() throws {
+    func testReplacingOwnedServiceAllowsImmediateRegistrationOfSameShortcut() throws {
         let registrar = RecordingRegistrar()
         let shortcut = HotKeyShortcut(keyCode: 7, modifiers: 3)
-        var firstService: HotKeyService? = HotKeyService(registrar: registrar)
-        try firstService?.register(shortcut)
+        var service: HotKeyService? = HotKeyService(registrar: registrar)
+        try service?.register(shortcut)
+        let replacement = HotKeyService(registrar: registrar)
 
-        firstService = nil
-        let replacementService = HotKeyService(registrar: registrar)
+        HotKeyService.replace(&service, with: replacement)
 
-        XCTAssertNoThrow(try replacementService.register(shortcut))
+        let current = try XCTUnwrap(service)
+        XCTAssertIdentical(current, replacement)
+        XCTAssertNoThrow(try current.register(shortcut))
     }
 }
 

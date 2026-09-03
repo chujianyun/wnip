@@ -269,3 +269,79 @@ already-isolated deinitialization synchronously invokes the registrar.
 
 - Host-only `linkd.autoShortcut` and detached-signature diagnostics remained
   present during tests but did not affect the 26 passing tests.
+
+## Review-fix round 4
+
+### RED/GREEN evidence
+
+RED command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS' -only-testing:WnipTests/HotKeyServiceTests
+```
+
+RED output: `** TEST FAILED **`; the focused ownership regressions failed to
+compile with `type 'HotKeyService' has no member 'shutdown'` and `type
+'HotKeyService' has no member 'replace'`. This proved that callers had no
+single, main-actor-isolated operation that released the old registration before
+discarding or replacing the service.
+
+GREEN command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS' -only-testing:WnipTests/HotKeyServiceTests
+```
+
+GREEN output: `** TEST SUCCEEDED **`; 5 tests executed with 0 failures. The
+replacement regression uses a duplicate-rejecting registrar and immediately
+registers the same shortcut on the replacement, with no sleep or actor yield.
+The existing conflict rollback test also remains green.
+
+Final command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS'
+```
+
+Final output: `** TEST SUCCEEDED **`; 26 tests executed with 0 failures.
+
+Build/install command:
+
+```sh
+xcodebuild install -project Wnip.xcodeproj -scheme Wnip -configuration Debug -destination 'platform=macOS' DSTROOT=/tmp/wnip-task3-round4.03DayS INSTALL_PATH=/Applications
+```
+
+Output: `** INSTALL SUCCEEDED **`; the built app was installed at
+`/tmp/wnip-task3-round4.03DayS/Applications/Wnip.app`. Launching that app's
+executable produced a live `Wnip` process (PID 58635) with bundle identifier
+`com.wnip.app`; it was then stopped after the smoke check.
+
+### Changed files and self-review
+
+- `Wnip/System/HotKeyService.swift`: replaces the Swift 6.2-only `isolated
+  deinit` assumption with explicit `replace(_:with:)` and `shutdown(_:)`
+  ownership operations. Because `HotKeyService` is `@MainActor`, each operation
+  synchronously unregisters before updating the owner's reference. A same-object
+  replacement is a no-op. Plain `deinit` retains only asynchronous best-effort
+  cleanup and is explicitly documented as unsuitable for ordering.
+- `WnipTests/System/HotKeyServiceTests.swift`: replaces tests that incorrectly
+  treated final release as a synchronous lifecycle boundary with focused tests
+  for deterministic shutdown and immediate same-shortcut replacement.
+
+The regression's mutation check is direct: deleting `current?.unregister()`
+from `replace(_:with:)` makes immediate registration throw `conflict`.
+`unregister()` clears the stored registration before the old instance is
+released, so its best-effort deinitializer cannot schedule duplicate cleanup.
+No compiler or language-version setting changed; `project.yml` remains on
+Swift 5.0 and macOS 15.
+
+### Concerns
+
+- Future coordinators must use `HotKeyService.replace`/`shutdown` at ownership
+  boundaries. Directly assigning `nil` or replacing a service reference still
+  receives only best-effort asynchronous deinitializer cleanup, by design;
+  Swift does not guarantee synchronous arbitrary off-actor destruction.
+- The existing host-only `com.apple.linkd.autoShortcut` and detached-signature
+  diagnostics remained during tests. The install build also reports the
+  pre-existing missing App Category warning. None affected test, install, or
+  launch results.
