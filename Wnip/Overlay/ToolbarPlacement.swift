@@ -36,3 +36,31 @@ enum ToolbarPlacement {
         min(max(value, minimum), max(minimum, maximum))
     }
 }
+
+enum PixelBadgePlacement {
+    private static let spacing: CGFloat = 4
+    private static let displayInset: CGFloat = 4
+
+    static func resolve(
+        selection: CGRect,
+        visibleBounds: CGRect,
+        badgeSize: CGSize
+    ) -> CGRect {
+        let selection = selection.standardized
+        let safeBounds = visibleBounds.standardized.insetBy(dx: displayInset, dy: displayInset)
+        let proposedOrigin = CGPoint(
+            x: selection.minX,
+            y: selection.minY - spacing - badgeSize.height
+        )
+        return CGRect(
+            x: clamp(proposedOrigin.x, minimum: safeBounds.minX, maximum: safeBounds.maxX - badgeSize.width),
+            y: clamp(proposedOrigin.y, minimum: safeBounds.minY, maximum: safeBounds.maxY - badgeSize.height),
+            width: badgeSize.width,
+            height: badgeSize.height
+        )
+    }
+
+    private static func clamp(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {
+        min(max(value, minimum), max(minimum, maximum))
+    }
+}

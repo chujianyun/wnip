@@ -1,6 +1,29 @@
 import AppKit
 import SwiftUI
 
+enum OverlayKeyboardAction: Equatable, Sendable {
+    case cancel
+    case undo
+}
+
+enum OverlayKeyboardShortcut {
+    static func resolve(
+        keyCode: UInt16,
+        charactersIgnoringModifiers: String?,
+        modifiers: NSEvent.ModifierFlags
+    ) -> OverlayKeyboardAction? {
+        if keyCode == 53 {
+            return .cancel
+        }
+        let effectiveModifiers = modifiers.intersection(.deviceIndependentFlagsMask)
+        if effectiveModifiers == .command,
+           charactersIgnoringModifiers?.lowercased() == "z" {
+            return .undo
+        }
+        return nil
+    }
+}
+
 struct OverlayPresentation: Equatable, Sendable {
     let mode: CaptureMode
     let displays: [DisplayDescriptor]
@@ -54,6 +77,16 @@ final class OverlayController: OverlayControlling {
     private var presentation: OverlayPresentation?
     private var callbacks = OverlayCallbacks()
     private var eventMonitor: Any?
+    private let visibleFrameProvider: @MainActor (DisplayDescriptor) -> CGRect
+
+    init(
+        visibleFrameProvider: @escaping @MainActor (DisplayDescriptor) -> CGRect = { display in
+            AppKitScreenGeometry.current.first(where: { $0.displayID == display.id })?.visibleFrame
+                ?? display.frame
+        }
+    ) {
+        self.visibleFrameProvider = visibleFrameProvider
+    }
 
     func present(_ presentation: OverlayPresentation, callbacks: OverlayCallbacks) {
         dismissAll()
@@ -120,7 +153,10 @@ final class OverlayController: OverlayControlling {
             if let window = windows[display.id], let viewModel = viewModels[display.id] {
                 if viewModel.display == display {
                     window.setFrame(display.frame, display: false)
-                    viewModel.presentation = presentation
+                    viewModel.update(
+                        presentation: presentation,
+                        visibleFrame: visibleFrameProvider(display)
+                    )
                     continue
                 }
                 window.orderOut(nil)
@@ -136,7 +172,7 @@ final class OverlayController: OverlayControlling {
     private func makeWindow(for display: DisplayDescriptor, presentation: OverlayPresentation) {
         let viewModel = CaptureOverlayViewModel(
             display: display,
-            visibleFrame: visibleFrame(for: display),
+            visibleFrame: visibleFrameProvider(display),
             presentation: presentation
         )
         let view = CaptureOverlayView(
@@ -216,16 +252,20 @@ final class OverlayController: OverlayControlling {
         guard eventMonitor == nil else { return }
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            if event.keyCode == 53 {
+            switch OverlayKeyboardShortcut.resolve(
+                keyCode: event.keyCode,
+                charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                modifiers: event.modifierFlags
+            ) {
+            case .cancel:
                 self.callbacks.onCancel()
                 return nil
-            }
-            if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
-               event.charactersIgnoringModifiers?.lowercased() == "z" {
+            case .undo:
                 self.callbacks.onUndo()
                 return nil
+            case nil:
+                return event
             }
-            return event
         }
     }
 
@@ -236,11 +276,4 @@ final class OverlayController: OverlayControlling {
         }
     }
 
-    private func visibleFrame(for display: DisplayDescriptor) -> CGRect {
-        let matchingScreen = NSScreen.screens.first { screen in
-            let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            return screenNumber?.uint32Value == display.id
-        }
-        return matchingScreen?.visibleFrame ?? display.frame
-    }
 }

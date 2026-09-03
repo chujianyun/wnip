@@ -110,9 +110,10 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
 
     func availableContent() async throws -> CaptureContent {
         let content = try await SCShareableContent.current
+        let coordinateMapper = ScreenCaptureCoordinateMapper.current()
         return CaptureContent(
-            displays: content.displays.map(displayDescriptor(from:)),
-            windows: content.windows.map(candidate(from:))
+            displays: content.displays.map { displayDescriptor(from: $0, coordinateMapper: coordinateMapper) },
+            windows: content.windows.map { candidate(from: $0, coordinateMapper: coordinateMapper) }
         )
     }
 
@@ -143,19 +144,32 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
         return try await captureImage(using: filter)
     }
 
-    private func displayDescriptor(from display: SCDisplay) -> DisplayDescriptor {
-        let nativeWidth = CGFloat(CGDisplayPixelsWide(display.displayID))
-        let scale = display.width > 0 ? nativeWidth / CGFloat(display.width) : 1
-        return DisplayDescriptor(id: display.displayID, frame: display.frame, scale: scale)
+    private func displayDescriptor(
+        from display: SCDisplay,
+        coordinateMapper: ScreenCaptureCoordinateMapper
+    ) -> DisplayDescriptor {
+        let boundsWidth = CGDisplayBounds(display.displayID).width
+        let modePixelWidth = CGDisplayCopyDisplayMode(display.displayID).map { CGFloat($0.pixelWidth) }
+        let fallbackScale = modePixelWidth.map { pixelWidth in
+            boundsWidth > 0 ? pixelWidth / boundsWidth : 1
+        } ?? 1
+        return coordinateMapper.displayDescriptor(
+            displayID: display.displayID,
+            quartzFrame: display.frame,
+            fallbackScale: fallbackScale
+        )
     }
 
-    private func candidate(from window: SCWindow) -> CaptureCandidateWindow {
+    private func candidate(
+        from window: SCWindow,
+        coordinateMapper: ScreenCaptureCoordinateMapper
+    ) -> CaptureCandidateWindow {
         CaptureCandidateWindow(
             id: window.windowID,
             title: window.title,
             applicationName: window.owningApplication?.applicationName,
             bundleIdentifier: window.owningApplication?.bundleIdentifier,
-            frame: window.frame,
+            frame: coordinateMapper.appKitRect(fromQuartzRect: window.frame),
             isVisible: window.isOnScreen,
             isOnScreen: window.isOnScreen,
             isDesktopElement: window.owningApplication == nil || window.windowLayer < 0

@@ -51,4 +51,23 @@ final class ToolbarPlacementTests: XCTestCase {
 
         XCTAssertEqual(frame, CGRect(x: 712, y: 248, width: 180, height: 44))
     }
+
+    func testClampsPixelBadgeAgainstEveryVisibleEdge() {
+        let visibleBounds = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let badgeSize = CGSize(width: 100, height: 22)
+
+        let topRight = PixelBadgePlacement.resolve(
+            selection: CGRect(x: 790, y: 2, width: 10, height: 10),
+            visibleBounds: visibleBounds,
+            badgeSize: badgeSize
+        )
+        let bottomLeft = PixelBadgePlacement.resolve(
+            selection: CGRect(x: -40, y: 700, width: 10, height: 10),
+            visibleBounds: visibleBounds,
+            badgeSize: badgeSize
+        )
+
+        XCTAssertEqual(topRight, CGRect(x: 696, y: 4, width: 100, height: 22))
+        XCTAssertEqual(bottomLeft, CGRect(x: 4, y: 574, width: 100, height: 22))
+    }
 }

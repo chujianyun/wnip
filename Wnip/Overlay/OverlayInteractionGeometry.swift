@@ -1,5 +1,10 @@
 import CoreGraphics
 
+enum OverlaySelectionDrag: Equatable, Sendable {
+    case newSelection
+    case resize(SelectionHandle)
+}
+
 enum OverlayInteractionGeometry {
     static func localRect(forGlobalRect rect: CGRect, in displayFrame: CGRect) -> CGRect {
         let rect = rect.standardized
@@ -48,5 +53,62 @@ enum OverlayInteractionGeometry {
         candidatesInFrontToBackOrder windows: [CaptureCandidateWindow]
     ) -> CaptureCandidateWindow? {
         windows.first { $0.frame.standardized.contains(point) }
+    }
+
+    static func selectionDrag(
+        at point: CGPoint,
+        mode: CaptureMode,
+        showsToolbar: Bool,
+        selection: CGRect
+    ) -> OverlaySelectionDrag? {
+        guard mode == .region || showsToolbar else { return nil }
+        if let handle = resizeHandle(at: point, selection: selection) {
+            return .resize(handle)
+        }
+        return .newSelection
+    }
+
+    static func updatedSelection(
+        _ selection: SelectionModel,
+        drag: OverlaySelectionDrag?,
+        from startPoint: CGPoint,
+        to currentPoint: CGPoint,
+        within bounds: CGRect
+    ) -> SelectionModel {
+        guard let drag else { return selection }
+        var result = selection
+        switch drag {
+        case .newSelection:
+            result.begin(at: startPoint)
+            result.update(to: currentPoint, within: bounds)
+        case .resize(let handle):
+            result.resize(handle: handle, to: currentPoint, within: bounds)
+        }
+        return result
+    }
+
+    static func highlightedRect(
+        mode: CaptureMode,
+        showsToolbar: Bool,
+        selection: CGRect,
+        hoveredWindow: CaptureCandidateWindow?,
+        displayFrame: CGRect,
+        isActiveDisplay: Bool
+    ) -> CGRect? {
+        if showsToolbar {
+            return selection.isEmpty ? nil : selection.standardized
+        }
+        switch mode {
+        case .region:
+            return selection.isEmpty ? nil : selection.standardized
+        case .window:
+            return hoveredWindow?.frame.standardized
+        case .fullScreen:
+            return isActiveDisplay ? displayFrame.standardized : nil
+        }
+    }
+
+    static func tracksWindowHover(mode: CaptureMode, showsToolbar: Bool) -> Bool {
+        mode == .window && !showsToolbar
     }
 }

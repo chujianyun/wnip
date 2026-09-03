@@ -3,13 +3,18 @@ import SwiftUI
 @MainActor
 final class CaptureOverlayViewModel: ObservableObject {
     let display: DisplayDescriptor
-    let visibleFrame: CGRect
+    @Published private(set) var visibleFrame: CGRect
     @Published var presentation: OverlayPresentation
 
     init(display: DisplayDescriptor, visibleFrame: CGRect, presentation: OverlayPresentation) {
         self.display = display
         self.visibleFrame = visibleFrame
         self.presentation = presentation
+    }
+
+    func update(presentation: OverlayPresentation, visibleFrame: CGRect) {
+        self.presentation = presentation
+        self.visibleFrame = visibleFrame
     }
 }
 
@@ -24,7 +29,7 @@ struct CaptureOverlayView: View {
     let onDisplaySelected: (DisplayDescriptor) -> Void
     let onToolbarAction: (OverlayToolbarAction) -> Void
 
-    @State private var regionDrag: RegionDrag?
+    @State private var selectionDrag: OverlaySelectionDrag?
 
     var body: some View {
         GeometryReader { proxy in
@@ -63,7 +68,10 @@ struct CaptureOverlayView: View {
                 case .active(let location):
                     handleHover(at: location)
                 case .ended:
-                    if viewModel.presentation.mode == .window {
+                    if OverlayInteractionGeometry.tracksWindowHover(
+                        mode: viewModel.presentation.mode,
+                        showsToolbar: viewModel.presentation.showsToolbar
+                    ) {
                         onWindowHovered(viewModel.display.id, nil)
                     }
                 }
@@ -77,15 +85,15 @@ struct CaptureOverlayView: View {
 
     private var highlightedGlobalRect: CGRect? {
         let presentation = viewModel.presentation
-        switch presentation.mode {
-        case .region:
-            return presentation.selection.rect.isEmpty ? nil : presentation.selection.rect
-        case .window:
-            return presentation.windows.first(where: { $0.id == presentation.hoveredWindowID })?.frame
-                ?? (presentation.selection.rect.isEmpty ? nil : presentation.selection.rect)
-        case .fullScreen:
-            return presentation.activeDisplayID == viewModel.display.id ? viewModel.display.frame : nil
-        }
+        let hoveredWindow = presentation.windows.first { $0.id == presentation.hoveredWindowID }
+        return OverlayInteractionGeometry.highlightedRect(
+            mode: presentation.mode,
+            showsToolbar: presentation.showsToolbar,
+            selection: presentation.selection.rect,
+            hoveredWindow: hoveredWindow,
+            displayFrame: viewModel.display.frame,
+            isActiveDisplay: presentation.activeDisplayID == viewModel.display.id
+        )
     }
 
     private var highlightedRect: CGRect? {
@@ -168,20 +176,27 @@ struct CaptureOverlayView: View {
         let globalRect = highlightedGlobalRect ?? .zero
         let width = Int((globalRect.width * viewModel.display.scale).rounded())
         let height = Int((globalRect.height * viewModel.display.scale).rounded())
+        let badgeSize = CGSize(width: 104, height: 22)
+        let badgeFrame = PixelBadgePlacement.resolve(
+            selection: rect,
+            visibleBounds: CGRect(origin: .zero, size: viewModel.display.frame.size),
+            badgeSize: badgeSize
+        )
         return Text("\(width) × \(height) px")
             .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .frame(width: badgeSize.width, height: badgeSize.height)
             .background(Color(red: 0.08, green: 0.58, blue: 1), in: RoundedRectangle(cornerRadius: 3))
-            .fixedSize()
-            .position(x: max(rect.minX + 48, 48), y: max(rect.minY - 12, 12))
+            .position(x: badgeFrame.midX, y: badgeFrame.midY)
             .allowsHitTesting(false)
     }
 
     private func handleHover(at localPoint: CGPoint) {
         let presentation = viewModel.presentation
-        guard presentation.mode == .window else { return }
+        guard OverlayInteractionGeometry.tracksWindowHover(
+            mode: presentation.mode,
+            showsToolbar: presentation.showsToolbar
+        ) else { return }
 
         onActiveDisplay(viewModel.display.id)
         let globalPoint = OverlayInteractionGeometry.globalPoint(
@@ -203,51 +218,55 @@ struct CaptureOverlayView: View {
             in: display.frame
         )
 
-        switch viewModel.presentation.mode {
-        case .region:
-            var selection = viewModel.presentation.selection
-            if regionDrag == nil {
-                let startPoint = OverlayInteractionGeometry.globalPoint(
-                    forLocalPoint: value.startLocation,
-                    in: display.frame
-                )
-                if let handle = OverlayInteractionGeometry.resizeHandle(
-                    at: startPoint,
-                    selection: selection.rect
-                ) {
-                    regionDrag = .resize(handle)
-                } else {
-                    regionDrag = .newSelection
-                    selection.begin(at: startPoint)
-                }
-            }
-
-            switch regionDrag {
-            case .resize(let handle):
-                selection.resize(handle: handle, to: currentPoint, within: display.frame)
-            case .newSelection:
-                selection.update(to: currentPoint, within: display.frame)
-            case nil:
-                return
-            }
+        let presentation = viewModel.presentation
+        let startPoint = OverlayInteractionGeometry.globalPoint(
+            forLocalPoint: value.startLocation,
+            in: display.frame
+        )
+        if selectionDrag == nil {
+            selectionDrag = OverlayInteractionGeometry.selectionDrag(
+                at: startPoint,
+                mode: presentation.mode,
+                showsToolbar: presentation.showsToolbar,
+                selection: presentation.selection.rect
+            )
+        }
+        if let selectionDrag {
+            let selection = OverlayInteractionGeometry.updatedSelection(
+                presentation.selection,
+                drag: selectionDrag,
+                from: startPoint,
+                to: currentPoint,
+                within: display.frame
+            )
             onSelectionChanged(display.id, selection)
+            return
+        }
 
+        switch presentation.mode {
+        case .region:
+            break
         case .window, .fullScreen:
             onActiveDisplay(display.id)
         }
     }
 
     private func handleDragEnded(_ value: DragGesture.Value) {
-        defer { regionDrag = nil }
+        defer { selectionDrag = nil }
         let display = viewModel.display
         let globalPoint = OverlayInteractionGeometry.globalPoint(
             forLocalPoint: value.location,
             in: display.frame
         )
 
+        if selectionDrag != nil {
+            onSelectionCommitted(display.id, viewModel.presentation.selection)
+            return
+        }
+
         switch viewModel.presentation.mode {
         case .region:
-            onSelectionCommitted(display.id, viewModel.presentation.selection)
+            break
         case .window:
             if let window = OverlayInteractionGeometry.window(
                 at: globalPoint,
@@ -259,9 +278,4 @@ struct CaptureOverlayView: View {
             onDisplaySelected(display)
         }
     }
-}
-
-private enum RegionDrag {
-    case newSelection
-    case resize(SelectionHandle)
 }
