@@ -64,3 +64,12 @@ enum PixelBadgePlacement {
         min(max(value, minimum), max(minimum, maximum))
     }
 }
+
+enum PixelBadgeContent {
+    static func label(for selection: CGRect, on display: DisplayDescriptor) -> String {
+        let selection = selection.standardized
+        let width = Int((selection.width * display.scale).rounded())
+        let height = Int((selection.height * display.scale).rounded())
+        return "\(width) × \(height) px"
+    }
+}

@@ -67,6 +67,32 @@ final class ScreenCaptureCoordinateMapperTests: XCTestCase {
         XCTAssertEqual(pixelRect, CGRect(x: 200, y: 1664, width: 400, height: 100))
     }
 
+    func testProducerScaleFlowsIntoDisplayedPixelBadgeAtTwoX() {
+        let mapper = ScreenCaptureCoordinateMapper(
+            mainDisplayHeight: 982,
+            screens: [
+                AppKitScreenGeometry(
+                    displayID: 7,
+                    frame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+                    visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 944),
+                    scale: 2
+                )
+            ]
+        )
+        let descriptor = mapper.displayDescriptor(
+            displayID: 7,
+            quartzFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            fallbackScale: 1
+        )
+
+        let label = PixelBadgeContent.label(
+            for: CGRect(x: 100, y: 100, width: 200, height: 50),
+            on: descriptor
+        )
+
+        XCTAssertEqual(label, "400 × 100 px")
+    }
+
     func testUnmatchedDisplayFallsBackToQuartzConversionAndModeScale() {
         let mapper = ScreenCaptureCoordinateMapper(mainDisplayHeight: 1080, screens: [])
 

@@ -174,15 +174,13 @@ struct CaptureOverlayView: View {
 
     private func pixelSizeBadge(for rect: CGRect) -> some View {
         let globalRect = highlightedGlobalRect ?? .zero
-        let width = Int((globalRect.width * viewModel.display.scale).rounded())
-        let height = Int((globalRect.height * viewModel.display.scale).rounded())
         let badgeSize = CGSize(width: 104, height: 22)
         let badgeFrame = PixelBadgePlacement.resolve(
             selection: rect,
             visibleBounds: CGRect(origin: .zero, size: viewModel.display.frame.size),
             badgeSize: badgeSize
         )
-        return Text("\(width) × \(height) px")
+        return Text(PixelBadgeContent.label(for: globalRect, on: viewModel.display))
             .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .foregroundStyle(.white)
             .frame(width: badgeSize.width, height: badgeSize.height)
