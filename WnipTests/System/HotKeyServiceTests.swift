@@ -1,6 +1,7 @@
 import XCTest
 @testable import Wnip
 
+@MainActor
 final class HotKeyServiceTests: XCTestCase {
     func testRegisteringShortcutMakesItCurrent() throws {
         let registrar = RecordingRegistrar()
@@ -41,6 +42,7 @@ final class HotKeyServiceTests: XCTestCase {
     }
 }
 
+@MainActor
 private final class RecordingRegistrar: HotKeyRegistrar {
     private final class Registration: HotKeyRegistration {
         let shortcut: HotKeyShortcut
@@ -52,7 +54,7 @@ private final class RecordingRegistrar: HotKeyRegistrar {
 
     private let conflictingShortcuts: Set<HotKeyShortcut>
     private(set) var activeShortcuts: [HotKeyShortcut] = []
-    private var handlers: [HotKeyShortcut: () -> Void] = [:]
+    private var handlers: [HotKeyShortcut: @MainActor () -> Void] = [:]
 
     init(conflictingShortcuts: Set<HotKeyShortcut> = []) {
         self.conflictingShortcuts = conflictingShortcuts
@@ -71,7 +73,7 @@ private final class RecordingRegistrar: HotKeyRegistrar {
         activeShortcuts.removeAll { $0 == registration.shortcut }
     }
 
-    func register(_ shortcut: HotKeyShortcut, handler: @escaping () -> Void) throws -> any HotKeyRegistration {
+    func register(_ shortcut: HotKeyShortcut, handler: @escaping @MainActor () -> Void) throws -> any HotKeyRegistration {
         let registration = try register(shortcut)
         handlers[shortcut] = handler
         return registration

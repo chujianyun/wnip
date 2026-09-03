@@ -32,8 +32,9 @@ enum HotKeyFailure: LocalizedError, Equatable {
 
 protocol HotKeyRegistration: AnyObject {}
 
+@MainActor
 protocol HotKeyRegistrar: AnyObject {
-    func register(_ shortcut: HotKeyShortcut, handler: @escaping () -> Void) throws -> any HotKeyRegistration
+    func register(_ shortcut: HotKeyShortcut, handler: @escaping @MainActor () -> Void) throws -> any HotKeyRegistration
     func unregister(_ registration: any HotKeyRegistration)
 }
 
@@ -43,33 +44,35 @@ extension HotKeyRegistrar {
     }
 }
 
+@MainActor
 protocol HotKeyRegistering: AnyObject {
     var shortcut: HotKeyShortcut? { get }
 
     func register(_ shortcut: HotKeyShortcut) throws
-    func register(_ shortcut: HotKeyShortcut, handler: @escaping () -> Void) throws
+    func register(_ shortcut: HotKeyShortcut, handler: @escaping @MainActor () -> Void) throws
     func unregister()
 }
 
+@MainActor
 final class HotKeyService: HotKeyRegistering {
     private let registrar: any HotKeyRegistrar
     private var registration: (any HotKeyRegistration)?
-    private var handler: (() -> Void)?
+    private var handler: (@MainActor () -> Void)?
     private(set) var shortcut: HotKeyShortcut?
 
-    init(registrar: any HotKeyRegistrar = CarbonHotKeyRegistrar.shared) {
-        self.registrar = registrar
+    init() {
+        self.registrar = CarbonHotKeyRegistrar.shared
     }
 
-    deinit {
-        unregister()
+    init(registrar: any HotKeyRegistrar) {
+        self.registrar = registrar
     }
 
     func register(_ shortcut: HotKeyShortcut) throws {
         try register(shortcut, handler: {})
     }
 
-    func register(_ shortcut: HotKeyShortcut, handler: @escaping () -> Void) throws {
+    func register(_ shortcut: HotKeyShortcut, handler: @escaping @MainActor () -> Void) throws {
         if self.shortcut == shortcut {
             self.handler = handler
             return
@@ -97,6 +100,7 @@ final class HotKeyService: HotKeyRegistering {
     }
 }
 
+@MainActor
 final class CarbonHotKeyRegistrar: HotKeyRegistrar {
     static let shared = CarbonHotKeyRegistrar()
 
@@ -104,7 +108,7 @@ final class CarbonHotKeyRegistrar: HotKeyRegistrar {
 
     private init() {}
 
-    func register(_ shortcut: HotKeyShortcut, handler: @escaping () -> Void) throws -> any HotKeyRegistration {
+    func register(_ shortcut: HotKeyShortcut, handler: @escaping @MainActor () -> Void) throws -> any HotKeyRegistration {
         try installEventHandlerIfNeeded()
 
         let identifier = EventHotKeyID(signature: OSType(0x574E4950), id: nextIdentifier)
@@ -136,7 +140,7 @@ final class CarbonHotKeyRegistrar: HotKeyRegistrar {
     }
 
     private var eventHandler: EventHandlerRef?
-    private var handlers: [UInt32: () -> Void] = [:]
+    private var handlers: [UInt32: @MainActor () -> Void] = [:]
 
     private func installEventHandlerIfNeeded() throws {
         guard eventHandler == nil else { return }
@@ -158,19 +162,8 @@ final class CarbonHotKeyRegistrar: HotKeyRegistrar {
         }
     }
 
-    fileprivate func handlePress(_ event: EventRef) {
-        var identifier = EventHotKeyID()
-        let status = GetEventParameter(
-            event,
-            EventParamName(kEventParamDirectObject),
-            EventParamType(typeEventHotKeyID),
-            nil,
-            MemoryLayout<EventHotKeyID>.size,
-            nil,
-            &identifier
-        )
-        guard status == noErr else { return }
-        handlers[identifier.id]?()
+    fileprivate func handlePress(identifier: UInt32) {
+        handlers[identifier]?()
     }
 
     private final class CarbonRegistration: HotKeyRegistration {
@@ -189,7 +182,23 @@ private func carbonHotKeyEventHandler(
     _ event: EventRef?,
     _: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    guard let event else { return noErr }
-    CarbonHotKeyRegistrar.shared.handlePress(event)
+    guard let event, let identifier = carbonHotKeyIdentifier(from: event) else { return noErr }
+    Task { @MainActor in
+        CarbonHotKeyRegistrar.shared.handlePress(identifier: identifier)
+    }
     return noErr
+}
+
+private func carbonHotKeyIdentifier(from event: EventRef) -> UInt32? {
+    var identifier = EventHotKeyID()
+    let status = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &identifier
+    )
+    return status == noErr ? identifier.id : nil
 }
