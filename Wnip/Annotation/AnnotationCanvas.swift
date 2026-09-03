@@ -150,6 +150,26 @@ struct AnnotationCanvasTextLayout: Equatable, Sendable {
     }
 }
 
+struct AnnotationCanvasRenderSegment: Equatable, Sendable {
+    let start: CGPoint
+    let end: CGPoint
+}
+
+struct AnnotationCanvasArrowRenderLayout: Equatable, Sendable {
+    let shaft: AnnotationCanvasRenderSegment
+    let heads: [AnnotationCanvasRenderSegment]
+
+    init?(annotation: Annotation) {
+        guard case .arrow = annotation.content,
+              let geometry = annotation.arrowGeometry else { return nil }
+        shaft = AnnotationCanvasRenderSegment(start: geometry.start, end: geometry.tip)
+        heads = [geometry.headA, geometry.headB].compactMap { head in
+            guard head != geometry.tip else { return nil }
+            return AnnotationCanvasRenderSegment(start: geometry.tip, end: head)
+        }
+    }
+}
+
 enum AnnotationCanvasCursorKind: Equatable, Sendable {
     case arrow
     case crosshair
@@ -669,13 +689,9 @@ struct AnnotationCanvas: View {
             context.stroke(Path(ellipseIn: rect.standardized), with: .color(color), style: strokeStyle)
         case .line(let start, let end):
             context.stroke(Path.line(from: start, to: end), with: .color(color), style: strokeStyle)
-        case .arrow(let start, let end):
-            let geometry = AnnotationArrowGeometry(
-                start: start,
-                tip: end,
-                lineWidth: annotation.parameters.lineWidth
-            )
-            context.stroke(Path.arrow(geometry), with: .color(color), style: strokeStyle)
+        case .arrow:
+            guard let layout = AnnotationCanvasArrowRenderLayout(annotation: annotation) else { return }
+            context.stroke(Path.arrow(layout), with: .color(color), style: strokeStyle)
         case .pen(let points):
             context.stroke(Path.polyline(points), with: .color(color), style: strokeStyle)
         case .mosaic(let points):
@@ -777,12 +793,12 @@ private extension Path {
         return path
     }
 
-    static func arrow(_ geometry: AnnotationArrowGeometry) -> Path {
-        var path = line(from: geometry.start, to: geometry.tip)
-        path.move(to: geometry.tip)
-        path.addLine(to: geometry.headA)
-        path.move(to: geometry.tip)
-        path.addLine(to: geometry.headB)
+    static func arrow(_ layout: AnnotationCanvasArrowRenderLayout) -> Path {
+        var path = line(from: layout.shaft.start, to: layout.shaft.end)
+        for head in layout.heads {
+            path.move(to: head.start)
+            path.addLine(to: head.end)
+        }
         return path
     }
 }

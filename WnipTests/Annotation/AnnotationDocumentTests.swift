@@ -340,6 +340,71 @@ final class AnnotationCanvasTransformTests: XCTestCase {
         XCTAssertEqual(canvas.bounds.size.height, 42, accuracy: 0.000_001)
     }
 
+    func testProductionArrowRenderLayoutKeepsTransformedNegligibleArrowHeadless() throws {
+        let transform = try XCTUnwrap(AnnotationCanvasTransform(
+            sourceBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
+            cropRect: nil,
+            canvasSize: CGSize(width: 300, height: 300)
+        ))
+        let source = Annotation(
+            content: .arrow(
+                from: CGPoint(x: 10, y: 10),
+                to: CGPoint(x: 10.25, y: 10)
+            ),
+            parameters: .init(color: .red, lineWidth: 3, fontSize: 18)
+        )
+
+        let layout = try XCTUnwrap(
+            AnnotationCanvasArrowRenderLayout(annotation: transform.canvasAnnotation(source))
+        )
+
+        XCTAssertEqual(
+            layout.shaft,
+            AnnotationCanvasRenderSegment(
+                start: CGPoint(x: 30, y: 30),
+                end: CGPoint(x: 30.75, y: 30)
+            )
+        )
+        XCTAssertEqual(layout.heads, [])
+    }
+
+    func testProductionArrowRenderLayoutUsesResolvedTransformedHeadPoints() throws {
+        let transform = try XCTUnwrap(AnnotationCanvasTransform(
+            sourceBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
+            cropRect: nil,
+            canvasSize: CGSize(width: 300, height: 300)
+        ))
+        let source = Annotation(
+            content: .arrow(
+                from: CGPoint(x: 10, y: 10),
+                to: CGPoint(x: 50, y: 10)
+            ),
+            parameters: .init(color: .red, lineWidth: 2, fontSize: 18)
+        )
+        let canvas = transform.canvasAnnotation(source)
+        let resolvedGeometry = try XCTUnwrap(canvas.arrowGeometry)
+
+        let layout = try XCTUnwrap(AnnotationCanvasArrowRenderLayout(annotation: canvas))
+
+        XCTAssertEqual(
+            layout.shaft,
+            AnnotationCanvasRenderSegment(
+                start: resolvedGeometry.start,
+                end: resolvedGeometry.tip
+            )
+        )
+        XCTAssertEqual(layout.heads, [
+            AnnotationCanvasRenderSegment(
+                start: resolvedGeometry.tip,
+                end: resolvedGeometry.headA
+            ),
+            AnnotationCanvasRenderSegment(
+                start: resolvedGeometry.tip,
+                end: resolvedGeometry.headB
+            )
+        ])
+    }
+
     func testTextRenderLayoutUsesExactlyTheModelTextBounds() throws {
         let annotation = Annotation(
             content: .text(origin: CGPoint(x: 10, y: 20), value: "WWWW"),
