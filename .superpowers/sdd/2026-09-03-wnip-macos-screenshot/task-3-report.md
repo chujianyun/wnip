@@ -216,3 +216,56 @@ callback preserves round-one isolation guarantees.
 
 - Host-only `linkd.autoShortcut` and detached-signature diagnostics remained
   present during tests but did not affect the 25 passing tests.
+
+## Review-fix round 3
+
+### RED/GREEN evidence
+
+RED command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS' -only-testing:WnipTests/HotKeyServiceTests
+```
+
+RED output: `** TEST FAILED **`; the new
+`testReleasingServiceAllowsImmediateReplacementRegistration` failed with
+`XCTAssertNoThrow failed: threw error "conflict"`.
+
+GREEN command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS' -only-testing:WnipTests/HotKeyServiceTests
+```
+
+GREEN output: `** TEST SUCCEEDED **`; 5 tests executed with 0 failures,
+including immediate replacement registration without yielding or sleeping.
+
+Final command:
+
+```sh
+xcodegen generate && xcodebuild test -project Wnip.xcodeproj -scheme Wnip -destination 'platform=macOS'
+```
+
+Final output: `** TEST SUCCEEDED **`; 26 tests executed with 0 failures.
+
+### Changed files and self-review
+
+- `Wnip/System/HotKeyService.swift`: changes the service deinitializer to an
+  `isolated deinit`. Xcode 17F113 accepts this under the project’s Swift 5
+  language mode, and the deinitializer synchronously calls the main-actor
+  registrar before the service is released. No unstructured cleanup task
+  remains.
+- `WnipTests/System/HotKeyServiceTests.swift`: removes the lifecycle test’s
+  `Task.yield()` loop and adds a regression that releases a registered service
+  and immediately registers the identical shortcut through a replacement
+  service. The recording registrar now rejects duplicate active shortcuts, so
+  the regression observes the actual cleanup ordering.
+
+The public hot-key service and registrar remain main-actor isolated. The
+Carbon callback continues to use its explicit main-actor task hop; only
+already-isolated deinitialization synchronously invokes the registrar.
+
+### Concerns
+
+- Host-only `linkd.autoShortcut` and detached-signature diagnostics remained
+  present during tests but did not affect the 26 passing tests.

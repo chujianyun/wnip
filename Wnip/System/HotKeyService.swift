@@ -68,12 +68,9 @@ final class HotKeyService: HotKeyRegistering {
         self.registrar = registrar
     }
 
-    deinit {
+    isolated deinit {
         guard let registration else { return }
-        let registrar = registrar
-        Task { @MainActor in
-            registrar.unregister(registration)
-        }
+        registrar.unregister(registration)
     }
 
     func register(_ shortcut: HotKeyShortcut) throws {

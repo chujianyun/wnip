@@ -41,7 +41,7 @@ final class HotKeyServiceTests: XCTestCase {
         XCTAssertEqual(invocationCount, 1)
     }
 
-    func testReleasingRegisteredServiceUnregistersItsShortcut() async throws {
+    func testReleasingRegisteredServiceUnregistersItsShortcut() throws {
         let registrar = RecordingRegistrar()
         let shortcut = HotKeyShortcut(keyCode: 7, modifiers: 3)
         var service: HotKeyService? = HotKeyService(registrar: registrar)
@@ -49,11 +49,20 @@ final class HotKeyServiceTests: XCTestCase {
         XCTAssertEqual(registrar.activeShortcuts, [shortcut])
 
         service = nil
-        for _ in 0..<10 where !registrar.activeShortcuts.isEmpty {
-            await Task.yield()
-        }
 
         XCTAssertTrue(registrar.activeShortcuts.isEmpty)
+    }
+
+    func testReleasingServiceAllowsImmediateReplacementRegistration() throws {
+        let registrar = RecordingRegistrar()
+        let shortcut = HotKeyShortcut(keyCode: 7, modifiers: 3)
+        var firstService: HotKeyService? = HotKeyService(registrar: registrar)
+        try firstService?.register(shortcut)
+
+        firstService = nil
+        let replacementService = HotKeyService(registrar: registrar)
+
+        XCTAssertNoThrow(try replacementService.register(shortcut))
     }
 }
 
@@ -76,7 +85,7 @@ private final class RecordingRegistrar: HotKeyRegistrar {
     }
 
     func register(_ shortcut: HotKeyShortcut) throws -> any HotKeyRegistration {
-        guard !conflictingShortcuts.contains(shortcut) else {
+        guard !conflictingShortcuts.contains(shortcut), !activeShortcuts.contains(shortcut) else {
             throw HotKeyFailure.conflict
         }
         activeShortcuts.append(shortcut)
