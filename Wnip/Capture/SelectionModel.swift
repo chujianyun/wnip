@@ -34,7 +34,7 @@ struct SelectionModel: Equatable, Sendable {
         rect = minimumRect(from: clampedAnchor, to: clampedPoint, within: bounds)
     }
 
-    mutating func resize(_ handle: SelectionHandle, to point: CGPoint, within bounds: CGRect) {
+    mutating func resize(handle: SelectionHandle, to point: CGPoint, within bounds: CGRect) {
         guard !rect.isEmpty else { return }
 
         let point = clamp(point, to: bounds)

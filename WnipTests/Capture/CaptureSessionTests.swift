@@ -47,33 +47,58 @@ final class CaptureSessionTests: XCTestCase {
         XCTAssertEqual(session.phase, .requestingPermission(.window))
     }
 
-    func testEveryInvalidEventIsIgnoredWithoutMutatingState() {
-        let invalidTransitions: [(CapturePhase, CaptureEvent)] = [
-            (.idle, .permissionGranted),
-            (.idle, .cancel),
-            (.requestingPermission(.region), .selectionConfirmed),
-            (.requestingPermission(.region), .exportRequested),
-            (.selecting(.region), .permissionGranted),
-            (.selecting(.region), .exportSucceeded),
-            (.editing(.region), .permissionGranted),
-            (.editing(.region), .selectionConfirmed),
-            (.editing(.region), .exportSucceeded),
-            (.editing(.region), .exportFailed(.captureFailed("Disk full"))),
-            (.exporting(.region), .permissionGranted),
-            (.exporting(.region), .selectionConfirmed),
-            (.exporting(.region), .exportRequested),
-            (.completed, .permissionGranted),
-            (.completed, .cancel),
-            (.cancelled, .selectionConfirmed),
-            (.cancelled, .cancel),
-            (.failed(.unavailable), .exportRequested),
-            (.failed(.unavailable), .cancel)
+    func testEveryInvalidPhaseEventPairIsIgnoredWithoutMutatingState() {
+        let phases: [CapturePhase] = [
+            .idle,
+            .requestingPermission(.region),
+            .selecting(.region),
+            .editing(.region),
+            .exporting(.region),
+            .completed,
+            .cancelled,
+            .failed(.unavailable)
+        ]
+        let events: [CaptureEvent] = [
+            .start(.window),
+            .permissionGranted,
+            .permissionDenied,
+            .selectionConfirmed,
+            .exportRequested,
+            .exportSucceeded,
+            .exportFailed(.captureFailed("Disk full")),
+            .failed(.unavailable),
+            .cancel
         ]
 
-        for (phase, event) in invalidTransitions {
-            var session = CaptureSession(phase: phase)
-            XCTAssertEqual(session.handle(event), .ignored)
-            XCTAssertEqual(session.phase, phase)
+        for phase in phases {
+            for event in events where !isValid(event, from: phase) {
+                var session = CaptureSession(phase: phase)
+
+                XCTAssertEqual(session.handle(event), .ignored, "Expected \(event) to be ignored from \(phase)")
+                XCTAssertEqual(session.phase, phase, "Ignored \(event) mutated \(phase)")
+            }
+        }
+    }
+
+    private func isValid(_ event: CaptureEvent, from phase: CapturePhase) -> Bool {
+        switch (phase, event) {
+        case (.idle, .start), (.completed, .start), (.cancelled, .start), (.failed, .start):
+            return true
+        case (.requestingPermission, .start), (.requestingPermission, .permissionGranted),
+             (.requestingPermission, .permissionDenied), (.requestingPermission, .failed),
+             (.requestingPermission, .cancel):
+            return true
+        case (.selecting, .start), (.selecting, .selectionConfirmed), (.selecting, .failed),
+             (.selecting, .cancel):
+            return true
+        case (.editing, .start), (.editing, .exportRequested), (.editing, .failed),
+             (.editing, .cancel):
+            return true
+        case (.exporting, .start), (.exporting, .exportSucceeded), (.exporting, .exportFailed),
+             (.exporting, .failed), (.exporting, .cancel):
+            return true
+        default:
+            return false
         }
     }
 }
