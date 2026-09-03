@@ -73,6 +73,24 @@ final class AnnotationDocumentTests: XCTestCase {
         XCTAssertEqual(document.hitTest(pointOnArrowhead, tolerance: 1)?.id, arrow.id)
     }
 
+    func testArrowheadIsCappedForShortThickShaftAndOmittedForNegligibleShaft() {
+        let short = AnnotationArrowGeometry(
+            start: CGPoint(x: 0, y: 0),
+            tip: CGPoint(x: 4, y: 0),
+            lineWidth: 10
+        )
+        let shortHeadLength = hypot(short.tip.x - short.headA.x, short.tip.y - short.headA.y)
+        XCTAssertEqual(shortHeadLength, 1.8, accuracy: 0.001)
+
+        let negligible = AnnotationArrowGeometry(
+            start: CGPoint(x: 0, y: 0),
+            tip: CGPoint(x: 0.25, y: 0),
+            lineWidth: 3
+        )
+        XCTAssertEqual(negligible.headA, negligible.tip)
+        XCTAssertEqual(negligible.headB, negligible.tip)
+    }
+
     func testWideTextBoundsUseRenderedFontMeasurement() {
         let annotation = Annotation(
             content: .text(origin: CGPoint(x: 10, y: 20), value: "WWWW"),
@@ -116,12 +134,38 @@ final class AnnotationDocumentTests: XCTestCase {
     }
 
     func testUndoCropRestoresPreviousCrop() {
-        var document = AnnotationDocument(cropRect: CGRect(x: 0, y: 0, width: 100, height: 80))
+        var document = AnnotationDocument(
+            cropRect: CGRect(x: 0, y: 0, width: 100, height: 80),
+            sourceBounds: CGRect(x: 0, y: 0, width: 120, height: 100)
+        )
 
         XCTAssertTrue(document.perform(.crop(CGRect(x: 10, y: 12, width: 60, height: 40))))
         XCTAssertEqual(document.cropRect, CGRect(x: 10, y: 12, width: 60, height: 40))
         XCTAssertTrue(document.undo())
         XCTAssertEqual(document.cropRect, CGRect(x: 0, y: 0, width: 100, height: 80))
+    }
+
+    func testCropNormalizesToSourceBoundsAndRejectsDisjointRect() {
+        var document = AnnotationDocument(
+            sourceBounds: CGRect(x: 0, y: 0, width: 100, height: 80)
+        )
+
+        XCTAssertFalse(document.perform(.crop(CGRect(x: 120, y: 20, width: 30, height: 30))))
+        XCTAssertNil(document.cropRect)
+        XCTAssertFalse(document.canUndo)
+
+        XCTAssertTrue(document.perform(.crop(CGRect(x: -10, y: 10, width: 30, height: 40))))
+        XCTAssertEqual(document.cropRect, CGRect(x: 0, y: 10, width: 20, height: 40))
+        XCTAssertTrue(document.undo())
+        XCTAssertNil(document.cropRect)
+    }
+
+    func testCropIsRejectedWhenDocumentHasNoSourceBounds() {
+        var document = AnnotationDocument()
+
+        XCTAssertFalse(document.perform(.crop(CGRect(x: 10, y: 10, width: 20, height: 20))))
+        XCTAssertNil(document.cropRect)
+        XCTAssertFalse(document.canUndo)
     }
 
     func testStepNumberUsesNextVisibleNumberAfterUndo() {
@@ -148,7 +192,10 @@ final class AnnotationDocumentTests: XCTestCase {
     func testStepNumberExcludesCroppedAwayStepsAndUndoRestoresThem() {
         let visible = Annotation(content: .step(center: CGPoint(x: 20, y: 20), number: 1))
         let croppedAway = Annotation(content: .step(center: CGPoint(x: 120, y: 20), number: 7))
-        var document = AnnotationDocument(annotations: [visible, croppedAway])
+        var document = AnnotationDocument(
+            annotations: [visible, croppedAway],
+            sourceBounds: CGRect(x: 0, y: 0, width: 160, height: 80)
+        )
 
         XCTAssertTrue(document.perform(.crop(CGRect(x: 0, y: 0, width: 50, height: 50))))
         XCTAssertEqual(document.nextStepNumber, 2)
@@ -164,34 +211,35 @@ final class AnnotationDocumentTests: XCTestCase {
 }
 
 final class AnnotationCanvasTransformTests: XCTestCase {
-    func testCropMapsSourceToCanvasAndCanvasPointersBackToSource() {
-        let transform = AnnotationCanvasTransform(
+    func testTwoToOneCropAspectFitsCenteredInOnePointFiveToOneViewport() throws {
+        let transform = try XCTUnwrap(AnnotationCanvasTransform(
             sourceBounds: CGRect(x: 0, y: 0, width: 200, height: 100),
             cropRect: CGRect(x: 50, y: 20, width: 100, height: 50),
             canvasSize: CGSize(width: 300, height: 200)
-        )
+        ))
 
         XCTAssertEqual(transform.visibleSourceRect, CGRect(x: 50, y: 20, width: 100, height: 50))
-        XCTAssertEqual(transform.canvasPoint(forSourcePoint: CGPoint(x: 50, y: 20)), .zero)
-        XCTAssertEqual(transform.canvasPoint(forSourcePoint: CGPoint(x: 150, y: 70)), CGPoint(x: 300, y: 200))
+        XCTAssertEqual(transform.canvasPoint(forSourcePoint: CGPoint(x: 50, y: 20)), CGPoint(x: 0, y: 25))
+        XCTAssertEqual(transform.canvasPoint(forSourcePoint: CGPoint(x: 150, y: 70)), CGPoint(x: 300, y: 175))
+        XCTAssertEqual(transform.visibleCanvasRect, CGRect(x: 0, y: 25, width: 300, height: 150))
         XCTAssertEqual(transform.sourcePoint(forCanvasPoint: CGPoint(x: 150, y: 100)), CGPoint(x: 100, y: 45))
-        XCTAssertEqual(transform.canvasLength(forSourceLength: 2), 7)
+        XCTAssertEqual(transform.canvasLength(forSourceLength: 2), 6)
         XCTAssertEqual(
             transform.canvasRect(forSourceRect: CGRect(x: 75, y: 30, width: 50, height: 20)),
-            CGRect(x: 75, y: 40, width: 150, height: 80)
+            CGRect(x: 75, y: 55, width: 150, height: 60)
         )
         XCTAssertEqual(
             transform.sourceImageFrameInCanvas,
-            CGRect(x: -150, y: -80, width: 600, height: 400)
+            CGRect(x: -150, y: -35, width: 600, height: 300)
         )
     }
 
-    func testTransformConvertsSourceAnnotationGeometryToCanvasGeometry() {
-        let transform = AnnotationCanvasTransform(
+    func testTransformConvertsSourceAnnotationGeometryToCanvasGeometry() throws {
+        let transform = try XCTUnwrap(AnnotationCanvasTransform(
             sourceBounds: CGRect(x: 0, y: 0, width: 200, height: 100),
             cropRect: CGRect(x: 50, y: 20, width: 100, height: 50),
             canvasSize: CGSize(width: 300, height: 200)
-        )
+        ))
         let source = Annotation(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
             content: .line(from: CGPoint(x: 75, y: 30), to: CGPoint(x: 125, y: 50)),
@@ -203,10 +251,32 @@ final class AnnotationCanvasTransformTests: XCTestCase {
         XCTAssertEqual(canvas.id, source.id)
         XCTAssertEqual(
             canvas.content,
-            .line(from: CGPoint(x: 75, y: 40), to: CGPoint(x: 225, y: 120))
+            .line(from: CGPoint(x: 75, y: 55), to: CGPoint(x: 225, y: 115))
         )
-        XCTAssertEqual(canvas.parameters.lineWidth, 7)
-        XCTAssertEqual(canvas.parameters.fontSize, 63)
+        XCTAssertEqual(canvas.parameters.lineWidth, 6)
+        XCTAssertEqual(canvas.parameters.fontSize, 54)
+    }
+
+    func testTransformRejectsDisjointCropInsteadOfShowingFullSource() {
+        XCTAssertNil(AnnotationCanvasTransform(
+            sourceBounds: CGRect(x: 0, y: 0, width: 100, height: 80),
+            cropRect: CGRect(x: 120, y: 10, width: 20, height: 20),
+            canvasSize: CGSize(width: 300, height: 200)
+        ))
+    }
+
+    func testTextRenderLayoutUsesExactlyTheModelTextBounds() throws {
+        let annotation = Annotation(
+            content: .text(origin: CGPoint(x: 10, y: 20), value: "WWWW"),
+            parameters: .init(color: .red, lineWidth: 3, fontSize: 20)
+        )
+
+        let layout = try XCTUnwrap(AnnotationCanvasTextLayout(annotation: annotation))
+
+        XCTAssertEqual(layout.renderedFrame, annotation.bounds)
+        XCTAssertEqual(layout.value, "WWWW")
+        XCTAssertEqual(layout.fontSize, 20)
+        XCTAssertGreaterThan(layout.renderedFrame.width, 65)
     }
 }
 
@@ -382,6 +452,18 @@ final class AnnotationCanvasInteractionTests: XCTestCase {
         }
     }
 
+    func testArrowPointerDownPreviewHasNoArrowheadForZeroLengthShaft() throws {
+        let model = AnnotationCanvasModel()
+        model.selectTool(.arrow)
+
+        model.pointerDown(at: CGPoint(x: 20, y: 20))
+
+        let geometry = try XCTUnwrap(model.previewAnnotation?.arrowGeometry)
+        XCTAssertEqual(geometry.start, geometry.tip)
+        XCTAssertEqual(geometry.headA, geometry.tip)
+        XCTAssertEqual(geometry.headB, geometry.tip)
+    }
+
     func testMoveRenderItemsReplaceCommittedOriginalWithPreview() {
         let moving = Annotation(content: .rectangle(CGRect(x: 10, y: 10, width: 20, height: 20)))
         let untouched = Annotation(content: .ellipse(CGRect(x: 60, y: 60, width: 20, height: 20)))
@@ -392,12 +474,13 @@ final class AnnotationCanvasInteractionTests: XCTestCase {
         model.pointerDragged(to: CGPoint(x: 25, y: 20))
 
         XCTAssertEqual(model.renderItems, [
-            AnnotationCanvasRenderItem(annotation: untouched, isPreview: false),
             AnnotationCanvasRenderItem(
                 annotation: moving.translated(by: CGSize(width: 10, height: 5)),
                 isPreview: true
-            )
+            ),
+            AnnotationCanvasRenderItem(annotation: untouched, isPreview: false)
         ])
+        XCTAssertEqual(model.renderItems.map(\.annotation.id), [moving.id, untouched.id])
     }
 
     func testCursorUpdatesWhenToolAndModeChangeWhilePointerStaysInside() {

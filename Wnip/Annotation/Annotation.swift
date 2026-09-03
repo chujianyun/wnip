@@ -111,8 +111,14 @@ struct AnnotationArrowGeometry: Equatable, Sendable {
     init(start: CGPoint, tip: CGPoint, lineWidth: CGFloat) {
         self.start = start
         self.tip = tip
+        let shaftLength = hypot(tip.x - start.x, tip.y - start.y)
+        guard shaftLength > 0.5 else {
+            headA = tip
+            headB = tip
+            return
+        }
         let angle = atan2(tip.y - start.y, tip.x - start.x)
-        let length = max(12, lineWidth * 4)
+        let length = min(max(12, lineWidth * 4), shaftLength * 0.45)
         let spread = CGFloat.pi / 6
         headA = CGPoint(
             x: tip.x - length * cos(angle - spread),

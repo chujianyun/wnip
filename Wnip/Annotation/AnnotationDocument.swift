@@ -21,11 +21,18 @@ struct AnnotationDocument: Equatable, Sendable {
 
     private(set) var annotations: [Annotation]
     private(set) var cropRect: CGRect?
+    private(set) var sourceBounds: CGRect?
     private var undoStack: [HistoryEntry] = []
 
-    init(annotations: [Annotation] = [], cropRect: CGRect? = nil) {
+    init(
+        annotations: [Annotation] = [],
+        cropRect: CGRect? = nil,
+        sourceBounds: CGRect? = nil
+    ) {
         self.annotations = annotations
-        self.cropRect = cropRect?.standardized
+        let normalizedSourceBounds = sourceBounds?.standardized
+        self.sourceBounds = normalizedSourceBounds
+        self.cropRect = Self.normalizedCrop(cropRect, within: normalizedSourceBounds)
     }
 
     var canUndo: Bool { !undoStack.isEmpty }
@@ -77,10 +84,19 @@ struct AnnotationDocument: Equatable, Sendable {
             guard let index = annotations.firstIndex(where: { $0.id == id }) else { return false }
             annotations.remove(at: index)
         case .crop(let rect):
-            let normalized = rect.standardized
-            guard !normalized.isEmpty, normalized != cropRect else { return false }
+            guard let normalized = Self.normalizedCrop(rect, within: sourceBounds),
+                  normalized != cropRect else { return false }
             cropRect = normalized
         }
         return true
+    }
+
+    private static func normalizedCrop(_ crop: CGRect?, within sourceBounds: CGRect?) -> CGRect? {
+        guard var normalized = crop?.standardized,
+              !normalized.isEmpty,
+              let sourceBounds else { return nil }
+        normalized = normalized.intersection(sourceBounds)
+        guard !normalized.isNull, !normalized.isEmpty else { return nil }
+        return normalized
     }
 }

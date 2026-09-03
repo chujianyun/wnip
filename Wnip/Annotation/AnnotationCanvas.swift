@@ -6,34 +6,51 @@ struct AnnotationCanvasTransform: Equatable, Sendable {
     let visibleSourceRect: CGRect
     let canvasSize: CGSize
 
-    init(sourceBounds: CGRect, cropRect: CGRect?, canvasSize: CGSize) {
+    init?(sourceBounds: CGRect, cropRect: CGRect?, canvasSize: CGSize) {
         let sourceBounds = sourceBounds.standardized
-        let requested = cropRect?.standardized.intersection(sourceBounds) ?? sourceBounds
+        guard !sourceBounds.isEmpty else { return nil }
+        let requested: CGRect
+        if let cropRect {
+            requested = cropRect.standardized.intersection(sourceBounds)
+            guard !requested.isNull, !requested.isEmpty else { return nil }
+        } else {
+            requested = sourceBounds
+        }
         self.sourceBounds = sourceBounds
-        self.visibleSourceRect = requested.isNull || requested.isEmpty ? sourceBounds : requested
+        self.visibleSourceRect = requested
         self.canvasSize = CGSize(width: max(1, canvasSize.width), height: max(1, canvasSize.height))
     }
 
     var sourceImageFrameInCanvas: CGRect {
         CGRect(
-            x: -visibleSourceRect.minX * scaleX,
-            y: -visibleSourceRect.minY * scaleY,
-            width: sourceBounds.width * scaleX,
-            height: sourceBounds.height * scaleY
+            x: viewportOffset.x + ((sourceBounds.minX - visibleSourceRect.minX) * scale),
+            y: viewportOffset.y + ((sourceBounds.minY - visibleSourceRect.minY) * scale),
+            width: sourceBounds.width * scale,
+            height: sourceBounds.height * scale
+        )
+    }
+
+    var visibleCanvasRect: CGRect {
+        CGRect(
+            origin: viewportOffset,
+            size: CGSize(
+                width: visibleSourceRect.width * scale,
+                height: visibleSourceRect.height * scale
+            )
         )
     }
 
     func canvasPoint(forSourcePoint point: CGPoint) -> CGPoint {
         CGPoint(
-            x: (point.x - visibleSourceRect.minX) * scaleX,
-            y: (point.y - visibleSourceRect.minY) * scaleY
+            x: viewportOffset.x + ((point.x - visibleSourceRect.minX) * scale),
+            y: viewportOffset.y + ((point.y - visibleSourceRect.minY) * scale)
         )
     }
 
     func sourcePoint(forCanvasPoint point: CGPoint) -> CGPoint {
         CGPoint(
-            x: visibleSourceRect.minX + (point.x / scaleX),
-            y: visibleSourceRect.minY + (point.y / scaleY)
+            x: visibleSourceRect.minX + ((point.x - viewportOffset.x) / scale),
+            y: visibleSourceRect.minY + ((point.y - viewportOffset.y) / scale)
         )
     }
 
@@ -42,12 +59,12 @@ struct AnnotationCanvasTransform: Equatable, Sendable {
         let origin = canvasPoint(forSourcePoint: rect.origin)
         return CGRect(
             origin: origin,
-            size: CGSize(width: rect.width * scaleX, height: rect.height * scaleY)
+            size: CGSize(width: rect.width * scale, height: rect.height * scale)
         )
     }
 
     func canvasLength(forSourceLength length: CGFloat) -> CGFloat {
-        length * ((scaleX + scaleY) / 2)
+        length * scale
     }
 
     func canvasAnnotation(_ annotation: Annotation) -> Annotation {
@@ -89,8 +106,19 @@ struct AnnotationCanvasTransform: Equatable, Sendable {
         )
     }
 
-    private var scaleX: CGFloat { canvasSize.width / max(1, visibleSourceRect.width) }
-    private var scaleY: CGFloat { canvasSize.height / max(1, visibleSourceRect.height) }
+    private var scale: CGFloat {
+        min(
+            canvasSize.width / max(1, visibleSourceRect.width),
+            canvasSize.height / max(1, visibleSourceRect.height)
+        )
+    }
+
+    private var viewportOffset: CGPoint {
+        CGPoint(
+            x: (canvasSize.width - (visibleSourceRect.width * scale)) / 2,
+            y: (canvasSize.height - (visibleSourceRect.height * scale)) / 2
+        )
+    }
 }
 
 enum AnnotationCanvasInteractionMode: Equatable, Sendable {
@@ -101,6 +129,20 @@ enum AnnotationCanvasInteractionMode: Equatable, Sendable {
 struct AnnotationCanvasRenderItem: Equatable, Sendable {
     let annotation: Annotation
     let isPreview: Bool
+}
+
+struct AnnotationCanvasTextLayout: Equatable, Sendable {
+    let renderedFrame: CGRect
+    let value: String
+    let fontSize: CGFloat
+
+    init?(annotation: Annotation) {
+        guard case .text(_, let value) = annotation.content,
+              let textGeometry = annotation.textGeometry else { return nil }
+        self.renderedFrame = textGeometry.frame
+        self.value = value
+        self.fontSize = annotation.parameters.fontSize
+    }
 }
 
 enum AnnotationCanvasCursorKind: Equatable, Sendable {
@@ -335,12 +377,15 @@ final class AnnotationCanvasModel: ObservableObject {
         } else {
             replacedID = nil
         }
-        var items = document.annotations.compactMap { annotation in
-            annotation.id == replacedID
-                ? nil
-                : AnnotationCanvasRenderItem(annotation: annotation, isPreview: false)
+        var insertedPreview = false
+        var items = document.annotations.map { annotation in
+            if annotation.id == replacedID, let previewAnnotation {
+                insertedPreview = true
+                return AnnotationCanvasRenderItem(annotation: previewAnnotation, isPreview: true)
+            }
+            return AnnotationCanvasRenderItem(annotation: annotation, isPreview: false)
         }
-        if let previewAnnotation {
+        if let previewAnnotation, !insertedPreview {
             items.append(AnnotationCanvasRenderItem(annotation: previewAnnotation, isPreview: true))
         }
         return items
@@ -399,69 +444,72 @@ struct AnnotationCanvas: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let transform = canvasTransform(canvasSize: proxy.size)
-            ZStack(alignment: .topLeading) {
-                if let sourceImage {
-                    let imageFrame = transform.sourceImageFrameInCanvas
-                    Image(nsImage: sourceImage)
-                        .resizable()
-                        .frame(width: imageFrame.width, height: imageFrame.height)
-                        .position(x: imageFrame.midX, y: imageFrame.midY)
-                }
+            if let transform = canvasTransform(canvasSize: proxy.size) {
+                ZStack(alignment: .topLeading) {
+                    ZStack(alignment: .topLeading) {
+                        if let sourceImage {
+                            let imageFrame = transform.sourceImageFrameInCanvas
+                            Image(nsImage: sourceImage)
+                                .resizable()
+                                .frame(width: imageFrame.width, height: imageFrame.height)
+                                .position(x: imageFrame.midX, y: imageFrame.midY)
+                        }
 
-                Canvas { context, _ in
-                    for item in model.renderItems {
-                        draw(
-                            transform.canvasAnnotation(item.annotation),
-                            in: &context,
-                            isPreview: item.isPreview
-                        )
+                        Canvas { context, _ in
+                            for item in model.renderItems {
+                                draw(
+                                    transform.canvasAnnotation(item.annotation),
+                                    in: &context,
+                                    isPreview: item.isPreview
+                                )
+                            }
+                        }
+                        .contentShape(AnnotationCanvasViewportShape(rect: transform.visibleCanvasRect))
+                        .gesture(canvasDrag(transform: transform))
+                        .onHover { inside in
+                            cursorState.setPointerInside(inside, activeCursor: model.cursorKind)
+                            cursorState.displayedCursor.nsCursor.set()
+                        }
+                        .onChange(of: model.cursorKind) { _, cursor in
+                            cursorState.activeCursorChanged(cursor)
+                            cursorState.displayedCursor.nsCursor.set()
+                        }
+
+                        if let selectedAnnotation = model.selectedAnnotation {
+                            selectionHandles(for: transform.canvasAnnotation(selectedAnnotation).bounds)
+                        }
+
+                        if let origin = model.textEditorOrigin {
+                            let canvasOrigin = transform.canvasPoint(forSourcePoint: origin)
+                            let canvasFontSize = transform.canvasLength(
+                                forSourceLength: model.parameters.fontSize
+                            )
+                            TextField("Text", text: $model.textDraft)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: canvasFontSize))
+                                .foregroundStyle(model.parameters.color.swiftUIColor)
+                                .padding(.horizontal, 4)
+                                .frame(minWidth: 120, minHeight: canvasFontSize * 1.4)
+                                .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 3))
+                                .position(
+                                    x: canvasOrigin.x + 60,
+                                    y: canvasOrigin.y + canvasFontSize * 0.7
+                                )
+                                .focused($isTextFieldFocused)
+                                .onSubmit { _ = model.commitText() }
+                                .onExitCommand { model.cancelTextEditing() }
+                        }
                     }
-                }
-                .contentShape(Rectangle())
-                .gesture(canvasDrag(transform: transform))
-                .onHover { inside in
-                    cursorState.setPointerInside(inside, activeCursor: model.cursorKind)
-                    cursorState.displayedCursor.nsCursor.set()
-                }
-                .onChange(of: model.cursorKind) { _, cursor in
-                    cursorState.activeCursorChanged(cursor)
-                    cursorState.displayedCursor.nsCursor.set()
-                }
+                    .clipShape(AnnotationCanvasViewportShape(rect: transform.visibleCanvasRect))
 
-                if let selectedAnnotation = model.selectedAnnotation {
-                    selectionHandles(for: transform.canvasAnnotation(selectedAnnotation).bounds)
+                    parameterControls
+                        .padding(8)
                 }
-
-                if let origin = model.textEditorOrigin {
-                    let canvasOrigin = transform.canvasPoint(forSourcePoint: origin)
-                    let canvasFontSize = transform.canvasLength(
-                        forSourceLength: model.parameters.fontSize
-                    )
-                    TextField("Text", text: $model.textDraft)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: canvasFontSize))
-                        .foregroundStyle(model.parameters.color.swiftUIColor)
-                        .padding(.horizontal, 4)
-                        .frame(minWidth: 120, minHeight: canvasFontSize * 1.4)
-                        .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 3))
-                        .position(
-                            x: canvasOrigin.x + 60,
-                            y: canvasOrigin.y + canvasFontSize * 0.7
-                        )
-                        .focused($isTextFieldFocused)
-                        .onSubmit { _ = model.commitText() }
-                        .onExitCommand { model.cancelTextEditing() }
+                .onChange(of: model.textEditorOrigin) { _, origin in
+                    isTextFieldFocused = origin != nil
                 }
-
-                parameterControls
-                    .padding(8)
+                .onDeleteCommand { _ = model.deleteSelection() }
             }
-            .clipped()
-            .onChange(of: model.textEditorOrigin) { _, origin in
-                isTextFieldFocused = origin != nil
-            }
-            .onDeleteCommand { _ = model.deleteSelection() }
         }
     }
 
@@ -481,12 +529,12 @@ struct AnnotationCanvas: View {
             }
     }
 
-    private func canvasTransform(canvasSize: CGSize) -> AnnotationCanvasTransform {
+    private func canvasTransform(canvasSize: CGSize) -> AnnotationCanvasTransform? {
         let sourceBounds: CGRect
-        if let sourceImage {
+        if let documentSourceBounds = model.document.sourceBounds {
+            sourceBounds = documentSourceBounds
+        } else if let sourceImage {
             sourceBounds = CGRect(origin: .zero, size: sourceImage.size)
-        } else if let cropRect = model.document.cropRect {
-            sourceBounds = cropRect
         } else {
             sourceBounds = CGRect(origin: .zero, size: canvasSize)
         }
@@ -631,13 +679,16 @@ struct AnnotationCanvas: View {
                 with: .color(.black.opacity(isPreview ? 0.2 : 0.28)),
                 style: StrokeStyle(lineWidth: annotation.parameters.lineWidth, lineCap: .square)
             )
-        case .text(let origin, let value):
-            let textOrigin = annotation.textGeometry?.frame.origin ?? origin
-            context.draw(
-                Text(value).font(.system(size: annotation.parameters.fontSize)).foregroundStyle(color),
-                at: textOrigin,
-                anchor: .topLeading
-            )
+        case .text(_, let value):
+            guard let layout = AnnotationCanvasTextLayout(annotation: annotation) else { return }
+            context.drawLayer { layer in
+                layer.clip(to: Path(layout.renderedFrame))
+                layer.draw(
+                    Text(value).font(.system(size: layout.fontSize)).foregroundStyle(color),
+                    at: layout.renderedFrame.origin,
+                    anchor: .topLeading
+                )
+            }
         case .highlight(let points):
             context.stroke(Path.polyline(points), with: .color(color), style: strokeStyle)
         case .step(let center, let number):
@@ -657,6 +708,14 @@ struct AnnotationCanvas: View {
                 anchor: .center
             )
         }
+    }
+}
+
+private struct AnnotationCanvasViewportShape: Shape {
+    let rect: CGRect
+
+    func path(in _: CGRect) -> Path {
+        Path(rect)
     }
 }
 
