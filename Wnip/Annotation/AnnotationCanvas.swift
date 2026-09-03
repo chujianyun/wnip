@@ -8,7 +8,11 @@ struct AnnotationCanvasTransform: Equatable, Sendable {
 
     init?(sourceBounds: CGRect, cropRect: CGRect?, canvasSize: CGSize) {
         let sourceBounds = sourceBounds.standardized
-        guard !sourceBounds.isEmpty else { return nil }
+        guard !sourceBounds.isEmpty,
+              canvasSize.width.isFinite,
+              canvasSize.height.isFinite,
+              canvasSize.width > 0,
+              canvasSize.height > 0 else { return nil }
         let requested: CGRect
         if let cropRect {
             requested = cropRect.standardized.intersection(sourceBounds)
@@ -18,7 +22,7 @@ struct AnnotationCanvasTransform: Equatable, Sendable {
         }
         self.sourceBounds = sourceBounds
         self.visibleSourceRect = requested
-        self.canvasSize = CGSize(width: max(1, canvasSize.width), height: max(1, canvasSize.height))
+        self.canvasSize = canvasSize
     }
 
     var sourceImageFrameInCanvas: CGRect {
@@ -102,7 +106,8 @@ struct AnnotationCanvasTransform: Equatable, Sendable {
                 color: annotation.parameters.color,
                 lineWidth: canvasLength(forSourceLength: annotation.parameters.lineWidth),
                 fontSize: canvasLength(forSourceLength: annotation.parameters.fontSize)
-            )
+            ),
+            resolvedArrowGeometry: annotation.arrowGeometry?.mapPoints(canvasPoint(forSourcePoint:))
         )
     }
 

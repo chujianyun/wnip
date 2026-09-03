@@ -130,6 +130,22 @@ struct AnnotationArrowGeometry: Equatable, Sendable {
         )
     }
 
+    private init(start: CGPoint, tip: CGPoint, headA: CGPoint, headB: CGPoint) {
+        self.start = start
+        self.tip = tip
+        self.headA = headA
+        self.headB = headB
+    }
+
+    func mapPoints(_ transform: (CGPoint) -> CGPoint) -> AnnotationArrowGeometry {
+        AnnotationArrowGeometry(
+            start: transform(start),
+            tip: transform(tip),
+            headA: transform(headA),
+            headB: transform(headB)
+        )
+    }
+
     func bounds(lineWidth: CGFloat) -> CGRect {
         let points = [start, tip, headA, headB]
         let minX = points.map(\.x).min() ?? 0
@@ -174,22 +190,26 @@ struct Annotation: Identifiable, Equatable, Sendable {
     let id: UUID
     let content: AnnotationContent
     let parameters: AnnotationToolParameters
+    private let resolvedArrowGeometry: AnnotationArrowGeometry?
 
     init(
         id: UUID = UUID(),
         content: AnnotationContent,
-        parameters: AnnotationToolParameters? = nil
+        parameters: AnnotationToolParameters? = nil,
+        resolvedArrowGeometry: AnnotationArrowGeometry? = nil
     ) {
         self.id = id
         self.content = content
         self.parameters = parameters ?? content.tool.defaultParameters
+        self.resolvedArrowGeometry = resolvedArrowGeometry
     }
 
     var tool: AnnotationTool { content.tool }
 
     var arrowGeometry: AnnotationArrowGeometry? {
         guard case .arrow(let start, let tip) = content else { return nil }
-        return AnnotationArrowGeometry(start: start, tip: tip, lineWidth: parameters.lineWidth)
+        return resolvedArrowGeometry
+            ?? AnnotationArrowGeometry(start: start, tip: tip, lineWidth: parameters.lineWidth)
     }
 
     var textGeometry: AnnotationTextGeometry? {
@@ -248,7 +268,13 @@ struct Annotation: Identifiable, Equatable, Sendable {
     }
 
     func translated(by offset: CGSize) -> Annotation {
-        Annotation(id: id, content: content.translated(by: offset), parameters: parameters)
+        let transform = CGAffineTransform(translationX: offset.width, y: offset.height)
+        return Annotation(
+            id: id,
+            content: content.translated(by: offset),
+            parameters: parameters,
+            resolvedArrowGeometry: resolvedArrowGeometry?.mapPoints { $0.applying(transform) }
+        )
     }
 
     func contains(_ point: CGPoint, tolerance: CGFloat) -> Bool {

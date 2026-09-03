@@ -265,6 +265,81 @@ final class AnnotationCanvasTransformTests: XCTestCase {
         ))
     }
 
+    func testTransformRejectsNonFiniteOrNonPositiveViewportDimensions() {
+        let invalidSizes = [
+            CGSize(width: 0, height: 100),
+            CGSize(width: -1, height: 100),
+            CGSize(width: CGFloat.nan, height: 100),
+            CGSize(width: CGFloat.infinity, height: 100),
+            CGSize(width: 100, height: 0),
+            CGSize(width: 100, height: -1),
+            CGSize(width: 100, height: CGFloat.nan),
+            CGSize(width: 100, height: CGFloat.infinity)
+        ]
+
+        for size in invalidSizes {
+            XCTAssertNil(
+                AnnotationCanvasTransform(
+                    sourceBounds: CGRect(x: 0, y: 0, width: 100, height: 80),
+                    cropRect: nil,
+                    canvasSize: size
+                ),
+                "Expected invalid viewport \(size) to be rejected"
+            )
+        }
+    }
+
+    func testTransformKeepsNegligibleSourceArrowHeadlessAtScaleThree() throws {
+        let transform = try XCTUnwrap(AnnotationCanvasTransform(
+            sourceBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
+            cropRect: nil,
+            canvasSize: CGSize(width: 300, height: 300)
+        ))
+        let source = Annotation(
+            content: .arrow(
+                from: CGPoint(x: 10, y: 10),
+                to: CGPoint(x: 10.25, y: 10)
+            ),
+            parameters: .init(color: .red, lineWidth: 3, fontSize: 18)
+        )
+
+        let geometry = try XCTUnwrap(transform.canvasAnnotation(source).arrowGeometry)
+
+        XCTAssertEqual(geometry.start, CGPoint(x: 30, y: 30))
+        XCTAssertEqual(geometry.tip, CGPoint(x: 30.75, y: 30))
+        XCTAssertEqual(geometry.headA, geometry.tip)
+        XCTAssertEqual(geometry.headB, geometry.tip)
+    }
+
+    func testTransformScalesResolvedArrowheadPointsAndBoundsUniformly() throws {
+        let transform = try XCTUnwrap(AnnotationCanvasTransform(
+            sourceBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
+            cropRect: nil,
+            canvasSize: CGSize(width: 300, height: 300)
+        ))
+        let source = Annotation(
+            content: .arrow(
+                from: CGPoint(x: 10, y: 10),
+                to: CGPoint(x: 50, y: 10)
+            ),
+            parameters: .init(color: .red, lineWidth: 2, fontSize: 18)
+        )
+
+        let canvas = transform.canvasAnnotation(source)
+        let geometry = try XCTUnwrap(canvas.arrowGeometry)
+
+        XCTAssertEqual(geometry.start, CGPoint(x: 30, y: 30))
+        XCTAssertEqual(geometry.tip, CGPoint(x: 150, y: 30))
+        XCTAssertEqual(geometry.headA.x, 118.82308546376021, accuracy: 0.000_001)
+        XCTAssertEqual(geometry.headA.y, 48, accuracy: 0.000_001)
+        XCTAssertEqual(geometry.headB.x, 118.82308546376021, accuracy: 0.000_001)
+        XCTAssertEqual(geometry.headB.y, 12, accuracy: 0.000_001)
+        XCTAssertEqual(canvas.bounds.origin.x, 27, accuracy: 0.000_001)
+        XCTAssertEqual(canvas.bounds.origin.y, 9, accuracy: 0.000_001)
+        XCTAssertEqual(canvas.bounds.size.width, 126, accuracy: 0.000_001)
+        XCTAssertEqual(canvas.bounds.size.height, 42, accuracy: 0.000_001)
+    }
+
     func testTextRenderLayoutUsesExactlyTheModelTextBounds() throws {
         let annotation = Annotation(
             content: .text(origin: CGPoint(x: 10, y: 20), value: "WWWW"),
