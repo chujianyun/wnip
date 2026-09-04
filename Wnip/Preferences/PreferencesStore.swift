@@ -4,21 +4,56 @@ struct AppPreferences: Codable, Equatable, Sendable {
     static let defaultFilenameRule = "Wnip-yyyy-MM-dd_HH-mm-ss"
     static let defaultJPEGQuality = 0.9
 
-    var shortcut: HotKeyShortcut
+    var regionShortcut: HotKeyShortcut
+    var windowShortcut: HotKeyShortcut
     var filenameRule: String
     var jpegQuality: Double
     var saveDirectoryBookmark: Data?
 
     init(
-        shortcut: HotKeyShortcut = .defaultCapture,
+        regionShortcut: HotKeyShortcut = .defaultRegionCapture,
+        windowShortcut: HotKeyShortcut = .defaultWindowCapture,
         filenameRule: String = AppPreferences.defaultFilenameRule,
         jpegQuality: Double = AppPreferences.defaultJPEGQuality,
         saveDirectoryBookmark: Data? = nil
     ) {
-        self.shortcut = shortcut
+        self.regionShortcut = regionShortcut
+        self.windowShortcut = windowShortcut
         self.filenameRule = filenameRule
         self.jpegQuality = jpegQuality
         self.saveDirectoryBookmark = saveDirectoryBookmark
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case regionShortcut
+        case windowShortcut
+        case shortcut
+        case filenameRule
+        case jpegQuality
+        case saveDirectoryBookmark
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        regionShortcut = try container.decodeIfPresent(HotKeyShortcut.self, forKey: .regionShortcut)
+            ?? container.decodeIfPresent(HotKeyShortcut.self, forKey: .shortcut)
+            ?? .defaultRegionCapture
+        windowShortcut = try container.decodeIfPresent(HotKeyShortcut.self, forKey: .windowShortcut)
+            ?? .defaultWindowCapture
+        filenameRule = try container.decodeIfPresent(String.self, forKey: .filenameRule)
+            ?? Self.defaultFilenameRule
+        jpegQuality = try container.decodeIfPresent(Double.self, forKey: .jpegQuality)
+            ?? Self.defaultJPEGQuality
+        saveDirectoryBookmark = try container.decodeIfPresent(Data.self, forKey: .saveDirectoryBookmark)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(regionShortcut, forKey: .regionShortcut)
+        try container.encode(windowShortcut, forKey: .windowShortcut)
+        try container.encode(filenameRule, forKey: .filenameRule)
+        try container.encode(jpegQuality, forKey: .jpegQuality)
+        try container.encodeIfPresent(saveDirectoryBookmark, forKey: .saveDirectoryBookmark)
     }
 }
 

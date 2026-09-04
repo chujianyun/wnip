@@ -6,16 +6,21 @@ struct WnipApp: App {
 
     var body: some Scene {
         MenuBarExtra("Wnip", systemImage: "camera.viewfinder") {
-            Button("Capture Region") { }
-            Button("Capture Window") { }
-            Button("Capture Full Screen") { }
+            Button("Capture Region") {
+                appDelegate.coordinator.startCapture(mode: .region)
+            }
+            Button("Capture Window") {
+                appDelegate.coordinator.startCapture(mode: .window)
+            }
+            Button("Capture Full Screen") {
+                appDelegate.coordinator.startCapture(mode: .fullScreen)
+            }
             Divider()
             SettingsLink()
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         Settings {
-            Text("Wnip Settings")
-                .frame(width: 360, height: 220)
+            SettingsView(coordinator: appDelegate.coordinator)
         }
     }
 }

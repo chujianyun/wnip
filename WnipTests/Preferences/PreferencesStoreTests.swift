@@ -25,7 +25,8 @@ final class PreferencesStoreTests: XCTestCase {
 
         let preferences = try store.load()
 
-        XCTAssertEqual(preferences.shortcut, .defaultCapture)
+        XCTAssertEqual(preferences.regionShortcut, .defaultRegionCapture)
+        XCTAssertEqual(preferences.windowShortcut, .defaultWindowCapture)
         XCTAssertEqual(preferences.filenameRule, "Wnip-yyyy-MM-dd_HH-mm-ss")
         XCTAssertEqual(preferences.jpegQuality, 0.9)
         XCTAssertNil(preferences.saveDirectoryBookmark)
@@ -33,7 +34,8 @@ final class PreferencesStoreTests: XCTestCase {
 
     func testSavesCodablePreferencesAcrossStoreInstances() throws {
         let preferences = AppPreferences(
-            shortcut: HotKeyShortcut(keyCode: 12, modifiers: 34),
+            regionShortcut: HotKeyShortcut(keyCode: 12, modifiers: 34),
+            windowShortcut: HotKeyShortcut(keyCode: 13, modifiers: 35),
             filenameRule: "Shot-yyyy",
             jpegQuality: 0.42,
             saveDirectoryBookmark: Data([0xA, 0xB])
@@ -42,6 +44,25 @@ final class PreferencesStoreTests: XCTestCase {
         try PreferencesStore(defaults: defaults).save(preferences)
 
         XCTAssertEqual(try PreferencesStore(defaults: defaults).load(), preferences)
+    }
+
+    func testLoadsLegacyShortcutAsRegionShortcutAndUsesDefaultWindowShortcut() throws {
+        let legacyShortcut = HotKeyShortcut(keyCode: 14, modifiers: 36)
+        let legacyJSON = """
+        {
+          "shortcut": { "keyCode": 14, "modifiers": 36 },
+          "filenameRule": "Legacy-yyyy",
+          "jpegQuality": 0.75
+        }
+        """.data(using: .utf8)!
+        defaults.set(legacyJSON, forKey: "com.wnip.preferences.appPreferences")
+
+        let preferences = try PreferencesStore(defaults: defaults).load()
+
+        XCTAssertEqual(preferences.regionShortcut, legacyShortcut)
+        XCTAssertEqual(preferences.windowShortcut, .defaultWindowCapture)
+        XCTAssertEqual(preferences.filenameRule, "Legacy-yyyy")
+        XCTAssertEqual(preferences.jpegQuality, 0.75)
     }
 
     func testReplacingSaveDirectoryStoresTheNewSecurityScopedBookmark() throws {

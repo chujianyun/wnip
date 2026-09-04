@@ -105,24 +105,85 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(overlay.presentations.map(\.mode), [.fullScreen])
     }
 
-    func testStartRegistersPersistedShortcutThatStartsRegionCapture() async {
-        let preferences = PreferencesFake(shortcut: HotKeyShortcut(keyCode: 12, modifiers: 3))
-        let hotKey = HotKeyFake()
+    func testStartRegistersPersistedShortcutsThatStartTheirCaptureModes() async {
+        let preferences = PreferencesFake(
+            regionShortcut: HotKeyShortcut(keyCode: 12, modifiers: 3),
+            windowShortcut: HotKeyShortcut(keyCode: 13, modifiers: 4)
+        )
+        let regionHotKey = HotKeyFake()
+        let windowHotKey = HotKeyFake()
         let overlay = OverlayFake()
         let coordinator = makeCoordinator(
             permissionGranted: true,
             overlay: overlay,
-            hotKey: hotKey,
+            regionHotKey: regionHotKey,
+            windowHotKey: windowHotKey,
             preferences: preferences
         )
 
         coordinator.start()
-        hotKey.trigger()
+        regionHotKey.trigger()
+        await coordinator.waitForPendingCaptureForTesting()
+        windowHotKey.trigger()
         await coordinator.waitForPendingCaptureForTesting()
 
-        XCTAssertEqual(coordinator.shortcut, preferences.preferences.shortcut)
-        XCTAssertEqual(hotKey.registeredShortcuts, [preferences.preferences.shortcut])
-        XCTAssertEqual(overlay.presentations.map(\.mode), [.region])
+        XCTAssertEqual(coordinator.regionShortcut, preferences.preferences.regionShortcut)
+        XCTAssertEqual(coordinator.windowShortcut, preferences.preferences.windowShortcut)
+        XCTAssertEqual(regionHotKey.registeredShortcuts, [preferences.preferences.regionShortcut])
+        XCTAssertEqual(windowHotKey.registeredShortcuts, [preferences.preferences.windowShortcut])
+        XCTAssertEqual(overlay.presentations.map(\.mode), [.region, .window])
+    }
+
+    func testUpdatingWindowShortcutRegistersPersistsAndTriggersWindowCapture() async {
+        let preferences = PreferencesFake()
+        let windowHotKey = HotKeyFake()
+        let overlay = OverlayFake()
+        let coordinator = makeCoordinator(
+            permissionGranted: true,
+            overlay: overlay,
+            windowHotKey: windowHotKey,
+            preferences: preferences
+        )
+        coordinator.start()
+        let replacement = HotKeyShortcut(keyCode: 15, modifiers: 5)
+
+        coordinator.updateWindowShortcut(replacement)
+        windowHotKey.trigger()
+        await coordinator.waitForPendingCaptureForTesting()
+
+        XCTAssertEqual(coordinator.windowShortcut, replacement)
+        XCTAssertEqual(preferences.preferences.windowShortcut, replacement)
+        XCTAssertEqual(windowHotKey.registeredShortcuts, [.defaultWindowCapture, replacement])
+        XCTAssertEqual(overlay.presentations.map(\.mode), [.window])
+    }
+
+    func testShortcutMatchingOtherCaptureModeIsRejectedAndPreservesOldShortcut() {
+        let preferences = PreferencesFake()
+        let regionHotKey = HotKeyFake()
+        let coordinator = makeCoordinator(regionHotKey: regionHotKey, preferences: preferences)
+        coordinator.start()
+
+        coordinator.updateRegionShortcut(.defaultWindowCapture)
+
+        XCTAssertEqual(coordinator.regionShortcut, .defaultRegionCapture)
+        XCTAssertEqual(preferences.preferences.regionShortcut, .defaultRegionCapture)
+        XCTAssertEqual(regionHotKey.registeredShortcuts, [.defaultRegionCapture])
+        XCTAssertEqual(coordinator.presentedError, .shortcutFailed("That shortcut is already assigned to Window Capture."))
+    }
+
+    func testRegistrationConflictPreservesPreviouslyRegisteredShortcutAndPreferences() {
+        let conflicting = HotKeyShortcut(keyCode: 15, modifiers: 5)
+        let preferences = PreferencesFake()
+        let regionHotKey = HotKeyFake(conflictingShortcuts: [conflicting])
+        let coordinator = makeCoordinator(regionHotKey: regionHotKey, preferences: preferences)
+        coordinator.start()
+
+        coordinator.updateRegionShortcut(conflicting)
+
+        XCTAssertEqual(coordinator.regionShortcut, .defaultRegionCapture)
+        XCTAssertEqual(preferences.preferences.regionShortcut, .defaultRegionCapture)
+        XCTAssertEqual(regionHotKey.shortcut, .defaultRegionCapture)
+        XCTAssertEqual(coordinator.presentedError, .shortcutFailed(HotKeyFailure.conflict.localizedDescription))
     }
 
     private func makeCoordinator(
@@ -130,7 +191,8 @@ final class CaptureCoordinatorTests: XCTestCase {
         permission: PermissionFake? = nil,
         screen: ScreenCaptureFake? = nil,
         overlay: OverlayFake? = nil,
-        hotKey: HotKeyFake? = nil,
+        regionHotKey: HotKeyFake? = nil,
+        windowHotKey: HotKeyFake? = nil,
         preferences: PreferencesFake? = nil
     ) -> CaptureCoordinator {
         CaptureCoordinator(
@@ -140,7 +202,8 @@ final class CaptureCoordinatorTests: XCTestCase {
             ),
             screen: screen ?? ScreenCaptureFake(content: ScreenCaptureFake.fixture),
             overlay: overlay ?? OverlayFake(),
-            hotKey: hotKey ?? HotKeyFake(),
+            regionHotKey: regionHotKey ?? HotKeyFake(),
+            windowHotKey: windowHotKey ?? HotKeyFake(),
             preferences: preferences ?? PreferencesFake()
         )
     }
@@ -255,8 +318,16 @@ private final class HotKeyFake: HotKeyRegistering {
     private(set) var shortcut: HotKeyShortcut?
     private(set) var registeredShortcuts: [HotKeyShortcut] = []
     private var handler: (@MainActor () -> Void)?
+    private let conflictingShortcuts: Set<HotKeyShortcut>
+
+    init(conflictingShortcuts: Set<HotKeyShortcut> = []) {
+        self.conflictingShortcuts = conflictingShortcuts
+    }
 
     func register(_ shortcut: HotKeyShortcut) throws {
+        if conflictingShortcuts.contains(shortcut) {
+            throw HotKeyFailure.conflict
+        }
         self.shortcut = shortcut
         registeredShortcuts.append(shortcut)
     }
@@ -277,17 +348,25 @@ private final class HotKeyFake: HotKeyRegistering {
 }
 
 private final class PreferencesFake: PreferencesStoring {
-    let preferences: AppPreferences
+    private(set) var preferences: AppPreferences
 
-    init(shortcut: HotKeyShortcut = .defaultCapture) {
-        preferences = AppPreferences(shortcut: shortcut)
+    init(
+        regionShortcut: HotKeyShortcut = .defaultRegionCapture,
+        windowShortcut: HotKeyShortcut = .defaultWindowCapture
+    ) {
+        preferences = AppPreferences(
+            regionShortcut: regionShortcut,
+            windowShortcut: windowShortcut
+        )
     }
 
     func load() throws -> AppPreferences {
         preferences
     }
 
-    func save(_ preferences: AppPreferences) throws {}
+    func save(_ preferences: AppPreferences) throws {
+        self.preferences = preferences
+    }
 
     func replaceSaveDirectoryBookmark(for directory: URL) throws {}
 }

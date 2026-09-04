@@ -2,8 +2,12 @@ import Carbon
 import Foundation
 
 struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
-    static let defaultCapture = HotKeyShortcut(
+    static let defaultRegionCapture = HotKeyShortcut(
         keyCode: UInt32(kVK_ANSI_X),
+        modifiers: UInt32(cmdKey | shiftKey)
+    )
+    static let defaultWindowCapture = HotKeyShortcut(
+        keyCode: UInt32(kVK_ANSI_W),
         modifiers: UInt32(cmdKey | shiftKey)
     )
 

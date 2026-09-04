@@ -4,6 +4,7 @@ import SwiftUI
 enum CaptureCoordinatorError: LocalizedError, Equatable {
     case permissionDenied(URL)
     case captureFailed(String)
+    case shortcutFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -11,19 +12,23 @@ enum CaptureCoordinatorError: LocalizedError, Equatable {
             return "Screen Recording permission is required."
         case .captureFailed(let message):
             return message
+        case .shortcutFailed(let message):
+            return message
         }
     }
 }
 
 @MainActor
 final class CaptureCoordinator: ObservableObject {
-    @Published private(set) var shortcut: HotKeyShortcut = .defaultCapture
+    @Published private(set) var regionShortcut: HotKeyShortcut = .defaultRegionCapture
+    @Published private(set) var windowShortcut: HotKeyShortcut = .defaultWindowCapture
     @Published var presentedError: CaptureCoordinatorError?
 
     private let permission: any ScreenRecordingAuthorizing
     private let screen: any ScreenCapturing
     private let overlay: any OverlayControlling
-    private let hotKey: any HotKeyRegistering
+    private let regionHotKey: any HotKeyRegistering
+    private let windowHotKey: any HotKeyRegistering
     private let preferences: any PreferencesStoring
     private var captureTask: Task<Void, Never>?
     private var requestID = 0
@@ -32,7 +37,8 @@ final class CaptureCoordinator: ObservableObject {
         permission = PermissionService()
         screen = ScreenCaptureService()
         overlay = OverlayController()
-        hotKey = HotKeyService()
+        regionHotKey = HotKeyService()
+        windowHotKey = HotKeyService()
         preferences = PreferencesStore()
     }
 
@@ -40,22 +46,28 @@ final class CaptureCoordinator: ObservableObject {
         permission: any ScreenRecordingAuthorizing,
         screen: any ScreenCapturing,
         overlay: any OverlayControlling,
-        hotKey: any HotKeyRegistering,
+        regionHotKey: any HotKeyRegistering,
+        windowHotKey: any HotKeyRegistering,
         preferences: any PreferencesStoring
     ) {
         self.permission = permission
         self.screen = screen
         self.overlay = overlay
-        self.hotKey = hotKey
+        self.regionHotKey = regionHotKey
+        self.windowHotKey = windowHotKey
         self.preferences = preferences
     }
 
     func start() {
         do {
             let preferences = try preferences.load()
-            shortcut = preferences.shortcut
-            try hotKey.register(preferences.shortcut) { [weak self] in
+            regionShortcut = preferences.regionShortcut
+            windowShortcut = preferences.windowShortcut
+            try regionHotKey.register(preferences.regionShortcut) { [weak self] in
                 self?.startCapture(mode: .region)
+            }
+            try windowHotKey.register(preferences.windowShortcut) { [weak self] in
+                self?.startCapture(mode: .window)
             }
         } catch {
             presentedError = .captureFailed(error.localizedDescription)
@@ -97,11 +109,75 @@ final class CaptureCoordinator: ObservableObject {
         }
     }
 
+    func updateRegionShortcut(_ shortcut: HotKeyShortcut) {
+        guard shortcut != windowShortcut else {
+            presentedError = .shortcutFailed("That shortcut is already assigned to Window Capture.")
+            return
+        }
+        updateShortcut(
+            shortcut,
+            current: regionShortcut,
+            hotKey: regionHotKey,
+            mode: .region,
+            apply: { $0.regionShortcut = shortcut },
+            publish: { [weak self] in self?.regionShortcut = shortcut }
+        )
+    }
+
+    func updateWindowShortcut(_ shortcut: HotKeyShortcut) {
+        guard shortcut != regionShortcut else {
+            presentedError = .shortcutFailed("That shortcut is already assigned to Region Capture.")
+            return
+        }
+        updateShortcut(
+            shortcut,
+            current: windowShortcut,
+            hotKey: windowHotKey,
+            mode: .window,
+            apply: { $0.windowShortcut = shortcut },
+            publish: { [weak self] in self?.windowShortcut = shortcut }
+        )
+    }
+
+    private func updateShortcut(
+        _ shortcut: HotKeyShortcut,
+        current: HotKeyShortcut,
+        hotKey: any HotKeyRegistering,
+        mode: CaptureMode,
+        apply: (inout AppPreferences) -> Void,
+        publish: () -> Void
+    ) {
+        guard shortcut != current else { return }
+        do {
+            try hotKey.register(shortcut) { [weak self] in
+                self?.startCapture(mode: mode)
+            }
+            do {
+                var updated = try preferences.load()
+                apply(&updated)
+                try preferences.save(updated)
+            } catch {
+                try? hotKey.register(current) { [weak self] in
+                    self?.startCapture(mode: mode)
+                }
+                throw error
+            }
+            publish()
+            presentedError = nil
+        } catch {
+            presentedError = .shortcutFailed(error.localizedDescription)
+        }
+    }
+
     func cancelCapture() {
         requestID &+= 1
         captureTask?.cancel()
         captureTask = nil
         overlay.dismissAll()
+    }
+
+    func clearPresentedError() {
+        presentedError = nil
     }
 
     func waitForPendingCaptureForTesting() async {
