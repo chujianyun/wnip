@@ -186,6 +186,43 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.presentedError, .shortcutFailed(HotKeyFailure.conflict.localizedDescription))
     }
 
+    func testRegionRegistrationFailureDoesNotPreventWindowShortcutFromStartingCapture() async {
+        let regionHotKey = HotKeyFake(conflictingShortcuts: [.defaultRegionCapture])
+        let windowHotKey = HotKeyFake()
+        let overlay = OverlayFake()
+        let coordinator = makeCoordinator(
+            permissionGranted: true,
+            overlay: overlay,
+            regionHotKey: regionHotKey,
+            windowHotKey: windowHotKey
+        )
+
+        coordinator.start()
+        windowHotKey.trigger()
+        await coordinator.waitForPendingCaptureForTesting()
+
+        XCTAssertEqual(windowHotKey.shortcut, .defaultWindowCapture)
+        XCTAssertEqual(overlay.presentations.map(\.mode), [.window])
+        XCTAssertEqual(coordinator.presentedError, .shortcutFailed(HotKeyFailure.conflict.localizedDescription))
+    }
+
+    func testShortcutRecordingTemporarilyUnregistersAndThenRestoresBothHotKeys() {
+        let regionHotKey = HotKeyFake()
+        let windowHotKey = HotKeyFake()
+        let coordinator = makeCoordinator(regionHotKey: regionHotKey, windowHotKey: windowHotKey)
+        coordinator.start()
+
+        coordinator.beginShortcutRecording()
+
+        XCTAssertNil(regionHotKey.shortcut)
+        XCTAssertNil(windowHotKey.shortcut)
+
+        coordinator.endShortcutRecording()
+
+        XCTAssertEqual(regionHotKey.shortcut, .defaultRegionCapture)
+        XCTAssertEqual(windowHotKey.shortcut, .defaultWindowCapture)
+    }
+
     private func makeCoordinator(
         permissionGranted: Bool = false,
         permission: PermissionFake? = nil,

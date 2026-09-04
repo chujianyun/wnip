@@ -7,15 +7,19 @@ struct SettingsView: View {
         Form {
             Section("Shortcuts") {
                 LabeledContent("Region Capture") {
-                    ShortcutRecorder(shortcut: coordinator.regionShortcut) {
-                        coordinator.updateRegionShortcut($0)
-                    }
+                    ShortcutRecorder(
+                        shortcut: coordinator.regionShortcut,
+                        onChange: { coordinator.updateRegionShortcut($0) },
+                        onRecordingChanged: recordingChanged
+                    )
                     .frame(width: 120, height: 28)
                 }
                 LabeledContent("Window Capture") {
-                    ShortcutRecorder(shortcut: coordinator.windowShortcut) {
-                        coordinator.updateWindowShortcut($0)
-                    }
+                    ShortcutRecorder(
+                        shortcut: coordinator.windowShortcut,
+                        onChange: { coordinator.updateWindowShortcut($0) },
+                        onRecordingChanged: recordingChanged
+                    )
                     .frame(width: 120, height: 28)
                 }
             }
@@ -32,6 +36,14 @@ struct SettingsView: View {
             Button("OK") { coordinator.clearPresentedError() }
         } message: {
             Text(coordinator.presentedError?.localizedDescription ?? "Unknown error")
+        }
+    }
+
+    private func recordingChanged(_ isRecording: Bool) {
+        if isRecording {
+            coordinator.beginShortcutRecording()
+        } else {
+            coordinator.endShortcutRecording()
         }
     }
 }

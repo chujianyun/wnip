@@ -32,6 +32,7 @@ final class CaptureCoordinator: ObservableObject {
     private let preferences: any PreferencesStoring
     private var captureTask: Task<Void, Never>?
     private var requestID = 0
+    private var isRecordingShortcut = false
 
     init() {
         permission = PermissionService()
@@ -63,15 +64,11 @@ final class CaptureCoordinator: ObservableObject {
             let preferences = try preferences.load()
             regionShortcut = preferences.regionShortcut
             windowShortcut = preferences.windowShortcut
-            try regionHotKey.register(preferences.regionShortcut) { [weak self] in
-                self?.startCapture(mode: .region)
-            }
-            try windowHotKey.register(preferences.windowShortcut) { [weak self] in
-                self?.startCapture(mode: .window)
-            }
         } catch {
             presentedError = .captureFailed(error.localizedDescription)
+            return
         }
+        registerCurrentShortcuts()
     }
 
     func startCapture(mode: CaptureMode) {
@@ -178,6 +175,40 @@ final class CaptureCoordinator: ObservableObject {
 
     func clearPresentedError() {
         presentedError = nil
+    }
+
+    func beginShortcutRecording() {
+        guard !isRecordingShortcut else { return }
+        isRecordingShortcut = true
+        regionHotKey.unregister()
+        windowHotKey.unregister()
+    }
+
+    func endShortcutRecording() {
+        guard isRecordingShortcut else { return }
+        isRecordingShortcut = false
+        registerCurrentShortcuts()
+    }
+
+    private func registerCurrentShortcuts() {
+        var firstError: Error?
+        do {
+            try regionHotKey.register(regionShortcut) { [weak self] in
+                self?.startCapture(mode: .region)
+            }
+        } catch {
+            firstError = error
+        }
+        do {
+            try windowHotKey.register(windowShortcut) { [weak self] in
+                self?.startCapture(mode: .window)
+            }
+        } catch {
+            if firstError == nil { firstError = error }
+        }
+        if let firstError {
+            presentedError = .shortcutFailed(firstError.localizedDescription)
+        }
     }
 
     func waitForPendingCaptureForTesting() async {

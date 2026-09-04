@@ -38,8 +38,16 @@ struct AppPreferences: Codable, Equatable, Sendable {
         regionShortcut = try container.decodeIfPresent(HotKeyShortcut.self, forKey: .regionShortcut)
             ?? container.decodeIfPresent(HotKeyShortcut.self, forKey: .shortcut)
             ?? .defaultRegionCapture
-        windowShortcut = try container.decodeIfPresent(HotKeyShortcut.self, forKey: .windowShortcut)
-            ?? .defaultWindowCapture
+        if let storedWindowShortcut = try container.decodeIfPresent(
+            HotKeyShortcut.self,
+            forKey: .windowShortcut
+        ) {
+            windowShortcut = storedWindowShortcut
+        } else {
+            windowShortcut = regionShortcut == .defaultWindowCapture
+                ? .defaultRegionCapture
+                : .defaultWindowCapture
+        }
         filenameRule = try container.decodeIfPresent(String.self, forKey: .filenameRule)
             ?? Self.defaultFilenameRule
         jpegQuality = try container.decodeIfPresent(Double.self, forKey: .jpegQuality)

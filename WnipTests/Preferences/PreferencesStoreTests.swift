@@ -65,6 +65,22 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(preferences.jpegQuality, 0.75)
     }
 
+    func testLegacyShortcutMatchingWindowDefaultUsesRegionDefaultForWindow() throws {
+        let legacyJSON = """
+        {
+          "shortcut": { "keyCode": 13, "modifiers": 768 },
+          "filenameRule": "Legacy-yyyy",
+          "jpegQuality": 0.75
+        }
+        """.data(using: .utf8)!
+        defaults.set(legacyJSON, forKey: "com.wnip.preferences.appPreferences")
+
+        let preferences = try PreferencesStore(defaults: defaults).load()
+
+        XCTAssertEqual(preferences.regionShortcut, .defaultWindowCapture)
+        XCTAssertEqual(preferences.windowShortcut, .defaultRegionCapture)
+    }
+
     func testReplacingSaveDirectoryStoresTheNewSecurityScopedBookmark() throws {
         let firstDirectory = try makeDirectory(named: "first")
         let replacementDirectory = try makeDirectory(named: "replacement")

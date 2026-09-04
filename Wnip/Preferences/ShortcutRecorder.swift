@@ -59,14 +59,24 @@ extension HotKeyShortcut {
 struct ShortcutRecorder: NSViewRepresentable {
     let shortcut: HotKeyShortcut
     let onChange: (HotKeyShortcut) -> Void
+    let onRecordingChanged: (Bool) -> Void
 
     func makeNSView(context: Context) -> ShortcutRecorderButton {
-        ShortcutRecorderButton(shortcut: shortcut, onChange: onChange)
+        ShortcutRecorderButton(
+            shortcut: shortcut,
+            onChange: onChange,
+            onRecordingChanged: onRecordingChanged
+        )
     }
 
     func updateNSView(_ button: ShortcutRecorderButton, context: Context) {
         button.shortcut = shortcut
         button.onChange = onChange
+        button.onRecordingChanged = onRecordingChanged
+    }
+
+    static func dismantleNSView(_ button: ShortcutRecorderButton, coordinator: ()) {
+        button.cancelRecording()
     }
 }
 
@@ -75,11 +85,18 @@ final class ShortcutRecorderButton: NSButton {
         didSet { if !isRecording { title = shortcut.displayText } }
     }
     var onChange: (HotKeyShortcut) -> Void
+    var onRecordingChanged: (Bool) -> Void
     private var isRecording = false
+    private var eventMonitor: Any?
 
-    init(shortcut: HotKeyShortcut, onChange: @escaping (HotKeyShortcut) -> Void) {
+    init(
+        shortcut: HotKeyShortcut,
+        onChange: @escaping (HotKeyShortcut) -> Void,
+        onRecordingChanged: @escaping (Bool) -> Void
+    ) {
         self.shortcut = shortcut
         self.onChange = onChange
+        self.onRecordingChanged = onRecordingChanged
         super.init(frame: .zero)
         title = shortcut.displayText
         bezelStyle = .rounded
@@ -96,12 +113,27 @@ final class ShortcutRecorderButton: NSButton {
     override var acceptsFirstResponder: Bool { true }
 
     @objc private func beginRecording() {
+        guard !isRecording else { return }
         isRecording = true
         title = "Type Shortcut"
+        onRecordingChanged(true)
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.isRecording else { return event }
+            self.handleKeyDown(event)
+            return nil
+        }
         window?.makeFirstResponder(self)
     }
 
     override func keyDown(with event: NSEvent) {
+        handleKeyDown(event)
+    }
+
+    func cancelRecording() {
+        finishRecording()
+    }
+
+    private func handleKeyDown(_ event: NSEvent) {
         if event.keyCode == UInt16(kVK_Escape) {
             finishRecording()
             return
@@ -123,7 +155,13 @@ final class ShortcutRecorderButton: NSButton {
     }
 
     private func finishRecording(displaying recorded: HotKeyShortcut? = nil) {
+        guard isRecording else { return }
         isRecording = false
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
         title = (recorded ?? shortcut).displayText
+        onRecordingChanged(false)
     }
 }

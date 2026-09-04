@@ -144,7 +144,7 @@ final class CarbonHotKeyRegistrar: HotKeyRegistrar {
             shortcut.modifiers,
             identifier,
             GetApplicationEventTarget(),
-            0,
+            OptionBits(kEventHotKeyExclusive),
             &reference
         )
 
