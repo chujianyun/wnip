@@ -3,6 +3,29 @@ import XCTest
 
 @MainActor
 final class CaptureCoordinatorTests: XCTestCase {
+    func testErrorPresentationMatchesPermissionCaptureAndShortcutFailures() {
+        let privacyURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
+
+        XCTAssertEqual(
+            CaptureCoordinatorError.permissionDenied(privacyURL).alertTitle,
+            "Screen Recording Permission Required"
+        )
+        XCTAssertEqual(
+            CaptureCoordinatorError.permissionDenied(privacyURL).recoveryURL,
+            privacyURL
+        )
+        XCTAssertEqual(
+            CaptureCoordinatorError.captureFailed("Unavailable").alertTitle,
+            "Capture Failed"
+        )
+        XCTAssertNil(CaptureCoordinatorError.captureFailed("Unavailable").recoveryURL)
+        XCTAssertEqual(
+            CaptureCoordinatorError.shortcutFailed("Conflict").alertTitle,
+            "Shortcut Could Not Be Updated"
+        )
+        XCTAssertNil(CaptureCoordinatorError.shortcutFailed("Conflict").recoveryURL)
+    }
+
     func testAuthorizedRegionRequestPresentsRegionOverlay() async {
         let screen = ScreenCaptureFake(content: ScreenCaptureFake.fixture)
         let overlay = OverlayFake()

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
@@ -27,13 +28,23 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 420, height: 190)
         .alert(
-            "Shortcut Could Not Be Updated",
+            coordinator.presentedError?.alertTitle ?? "Wnip",
             isPresented: Binding(
                 get: { coordinator.presentedError != nil },
                 set: { if !$0 { coordinator.clearPresentedError() } }
             )
         ) {
-            Button("OK") { coordinator.clearPresentedError() }
+            if let recoveryURL = coordinator.presentedError?.recoveryURL {
+                Button("Open System Settings") {
+                    coordinator.clearPresentedError()
+                    NSWorkspace.shared.open(recoveryURL)
+                }
+                Button("Cancel", role: .cancel) {
+                    coordinator.clearPresentedError()
+                }
+            } else {
+                Button("OK") { coordinator.clearPresentedError() }
+            }
         } message: {
             Text(coordinator.presentedError?.localizedDescription ?? "Unknown error")
         }
