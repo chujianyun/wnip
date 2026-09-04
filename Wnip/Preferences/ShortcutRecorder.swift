@@ -88,6 +88,7 @@ final class ShortcutRecorderButton: NSButton {
     var onRecordingChanged: (Bool) -> Void
     private var isRecording = false
     private var eventMonitor: Any?
+    private var windowCloseObserver: NSObjectProtocol?
 
     init(
         shortcut: HotKeyShortcut,
@@ -102,7 +103,7 @@ final class ShortcutRecorderButton: NSButton {
         bezelStyle = .rounded
         setButtonType(.momentaryPushIn)
         target = self
-        action = #selector(beginRecording)
+        action = #selector(startRecording)
     }
 
     @available(*, unavailable)
@@ -112,11 +113,20 @@ final class ShortcutRecorderButton: NSButton {
 
     override var acceptsFirstResponder: Bool { true }
 
-    @objc private func beginRecording() {
+    @objc func startRecording() {
         guard !isRecording else { return }
         isRecording = true
         title = "Type Shortcut"
         onRecordingChanged(true)
+        if let window {
+            windowCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.finishRecording()
+            }
+        }
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.isRecording else { return event }
             self.handleKeyDown(event)
@@ -160,6 +170,10 @@ final class ShortcutRecorderButton: NSButton {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
             self.eventMonitor = nil
+        }
+        if let windowCloseObserver {
+            NotificationCenter.default.removeObserver(windowCloseObserver)
+            self.windowCloseObserver = nil
         }
         title = (recorded ?? shortcut).displayText
         onRecordingChanged(false)
