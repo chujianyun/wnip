@@ -1,10 +1,46 @@
 import AppKit
 import SwiftUI
 
+struct SettingsAlertPresentation: Equatable {
+    let title: String
+    let message: String
+    let recoveryURL: URL?
+
+    init(error: CaptureCoordinatorError) {
+        message = error.localizedDescription
+        switch error {
+        case .permissionDenied(let url):
+            title = "Screen Recording Permission Required"
+            recoveryURL = url
+        case .captureFailed:
+            title = "Capture Failed"
+            recoveryURL = nil
+        case .shortcutFailed:
+            title = "Shortcut Could Not Be Updated"
+            recoveryURL = nil
+        }
+    }
+
+    var primaryButtonTitle: String {
+        recoveryURL == nil ? "OK" : "Open System Settings"
+    }
+
+    var cancelButtonTitle: String? {
+        recoveryURL == nil ? nil : "Cancel"
+    }
+
+    func openRecovery(using opener: (URL) -> Void) {
+        guard let recoveryURL else { return }
+        opener(recoveryURL)
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var coordinator: CaptureCoordinator
 
     var body: some View {
+        let alert = coordinator.presentedError.map(SettingsAlertPresentation.init)
+
         Form {
             Section("Shortcuts") {
                 LabeledContent("Region Capture") {
@@ -28,25 +64,25 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 420, height: 190)
         .alert(
-            coordinator.presentedError?.alertTitle ?? "Wnip",
+            alert?.title ?? "Wnip",
             isPresented: Binding(
                 get: { coordinator.presentedError != nil },
                 set: { if !$0 { coordinator.clearPresentedError() } }
             )
         ) {
-            if let recoveryURL = coordinator.presentedError?.recoveryURL {
-                Button("Open System Settings") {
+            if let alert, let cancelButtonTitle = alert.cancelButtonTitle {
+                Button(alert.primaryButtonTitle) {
                     coordinator.clearPresentedError()
-                    NSWorkspace.shared.open(recoveryURL)
+                    alert.openRecovery { NSWorkspace.shared.open($0) }
                 }
-                Button("Cancel", role: .cancel) {
+                Button(cancelButtonTitle, role: .cancel) {
                     coordinator.clearPresentedError()
                 }
-            } else {
-                Button("OK") { coordinator.clearPresentedError() }
+            } else if let alert {
+                Button(alert.primaryButtonTitle) { coordinator.clearPresentedError() }
             }
         } message: {
-            Text(coordinator.presentedError?.localizedDescription ?? "Unknown error")
+            Text(alert?.message ?? "Unknown error")
         }
     }
 

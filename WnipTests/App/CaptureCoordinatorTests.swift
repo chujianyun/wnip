@@ -5,25 +5,40 @@ import XCTest
 final class CaptureCoordinatorTests: XCTestCase {
     func testErrorPresentationMatchesPermissionCaptureAndShortcutFailures() {
         let privacyURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
+        let permissionPresentation = SettingsAlertPresentation(
+            error: .permissionDenied(privacyURL)
+        )
 
-        XCTAssertEqual(
-            CaptureCoordinatorError.permissionDenied(privacyURL).alertTitle,
-            "Screen Recording Permission Required"
+        XCTAssertEqual(permissionPresentation.title, "Screen Recording Permission Required")
+        XCTAssertEqual(permissionPresentation.message, "Screen Recording permission is required.")
+        XCTAssertEqual(permissionPresentation.primaryButtonTitle, "Open System Settings")
+        XCTAssertEqual(permissionPresentation.cancelButtonTitle, "Cancel")
+        var openedURL: URL?
+        permissionPresentation.openRecovery { openedURL = $0 }
+        XCTAssertEqual(openedURL, privacyURL)
+
+        let capturePresentation = SettingsAlertPresentation(
+            error: .captureFailed("Unavailable")
         )
         XCTAssertEqual(
-            CaptureCoordinatorError.permissionDenied(privacyURL).recoveryURL,
-            privacyURL
-        )
-        XCTAssertEqual(
-            CaptureCoordinatorError.captureFailed("Unavailable").alertTitle,
+            capturePresentation.title,
             "Capture Failed"
         )
-        XCTAssertNil(CaptureCoordinatorError.captureFailed("Unavailable").recoveryURL)
+        XCTAssertEqual(capturePresentation.primaryButtonTitle, "OK")
+        XCTAssertNil(capturePresentation.cancelButtonTitle)
+        openedURL = nil
+        capturePresentation.openRecovery { openedURL = $0 }
+        XCTAssertNil(openedURL)
+
+        let shortcutPresentation = SettingsAlertPresentation(
+            error: .shortcutFailed("Conflict")
+        )
         XCTAssertEqual(
-            CaptureCoordinatorError.shortcutFailed("Conflict").alertTitle,
+            shortcutPresentation.title,
             "Shortcut Could Not Be Updated"
         )
-        XCTAssertNil(CaptureCoordinatorError.shortcutFailed("Conflict").recoveryURL)
+        XCTAssertEqual(shortcutPresentation.primaryButtonTitle, "OK")
+        XCTAssertNil(shortcutPresentation.cancelButtonTitle)
     }
 
     func testAuthorizedRegionRequestPresentsRegionOverlay() async {

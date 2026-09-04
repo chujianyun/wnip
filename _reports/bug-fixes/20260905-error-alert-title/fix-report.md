@@ -3,7 +3,7 @@
 - 日期：2026-09-05
 - 修复范围：设置窗口错误弹窗
 - 处理状态：已修复
-- 发布状态：本地安装验证完成，待提交与合并
+- 发布状态：已提交，待合并
 
 ## 问题与影响
 
@@ -18,14 +18,14 @@
 
 ## 处理与修复点
 
-1. 为 `CaptureCoordinatorError` 增加按错误类型计算的弹窗标题。
-2. 权限错误暴露系统隐私设置 URL；设置弹窗提供 `Open System Settings` 和 `Cancel`，其他错误保持单一确认按钮。
-3. 增加回归测试，覆盖权限、截图和快捷键三类错误的标题及恢复 URL。
+1. 增加设置弹窗展示模型，集中生成三类错误的标题、正文和按钮配置。
+2. 权限错误携带系统隐私设置 URL；设置弹窗提供 `Open System Settings` 和 `Cancel`，其他错误保持单一确认按钮。
+3. 增加回归测试，覆盖权限、截图和快捷键三类展示，以及权限恢复按钮向 URL 打开器传值的行为。
 
 ## 变更范围
 
-- `Wnip/App/CaptureCoordinator.swift`：增加错误展示标题和权限恢复 URL。
-- `Wnip/Preferences/SettingsView.swift`：按错误类型展示标题与操作按钮。
+- `Wnip/App/CaptureCoordinator.swift`：保留三类协调器错误作为展示输入。
+- `Wnip/Preferences/SettingsView.swift`：增加可测试的弹窗展示模型，并按错误类型展示标题与操作按钮。
 - `WnipTests/App/CaptureCoordinatorTests.swift`：增加错误展示语义回归测试。
 
 ## 修复前后对照

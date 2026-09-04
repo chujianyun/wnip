@@ -17,21 +17,6 @@ enum CaptureCoordinatorError: LocalizedError, Equatable {
         }
     }
 
-    var alertTitle: String {
-        switch self {
-        case .permissionDenied:
-            return "Screen Recording Permission Required"
-        case .captureFailed:
-            return "Capture Failed"
-        case .shortcutFailed:
-            return "Shortcut Could Not Be Updated"
-        }
-    }
-
-    var recoveryURL: URL? {
-        guard case .permissionDenied(let url) = self else { return nil }
-        return url
-    }
 }
 
 @MainActor
