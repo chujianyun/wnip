@@ -35,6 +35,10 @@ final class CaptureCoordinator: ObservableObject {
     private let overlay: any OverlayControlling
     private let regionHotKey: any HotKeyRegistering
     private let windowHotKey: any HotKeyRegistering
+    private let pinHotKey: any HotKeyRegistering
+    private let pinnedImages: any PinnedImagePresenting
+    private var latestScreenshot: (image: PixelImage, frame: CGRect)?
+    private var isCapturing = false
     private let preferences: any PreferencesStoring
     private let clipboard: ImageClipboard
     private let output: any OutputServing
@@ -50,6 +54,8 @@ final class CaptureCoordinator: ObservableObject {
         overlay = OverlayController()
         regionHotKey = HotKeyService()
         windowHotKey = HotKeyService()
+        pinHotKey = HotKeyService()
+        pinnedImages = PinnedImageController()
         preferences = PreferencesStore()
         clipboard = ImageClipboard()
         output = OutputService()
@@ -65,13 +71,17 @@ final class CaptureCoordinator: ObservableObject {
         preferences: any PreferencesStoring,
         clipboard: ImageClipboard? = nil,
         output: (any OutputServing)? = nil,
-        feedback: (any CompletionFeedbackServing)? = nil
+        feedback: (any CompletionFeedbackServing)? = nil,
+        pinHotKey: (any HotKeyRegistering)? = nil,
+        pinnedImages: (any PinnedImagePresenting)? = nil
     ) {
         self.permission = permission
         self.screen = screen
         self.overlay = overlay
         self.regionHotKey = regionHotKey
         self.windowHotKey = windowHotKey
+        self.pinHotKey = pinHotKey ?? HotKeyService()
+        self.pinnedImages = pinnedImages ?? PinnedImageController()
         self.preferences = preferences
         self.clipboard = clipboard ?? ImageClipboard()
         self.output = output ?? OutputService()
@@ -97,6 +107,7 @@ final class CaptureCoordinator: ObservableObject {
         captureTask?.cancel()
         isCopying = false
         overlay.dismissAll()
+        isCapturing = true
 
         captureTask = Task { [weak self] in
             guard let self else { return }
@@ -105,6 +116,7 @@ final class CaptureCoordinator: ObservableObject {
                 guard !Task.isCancelled, currentID == requestID else { return }
                 // The system permission request already presents its own dialog.
                 presentedError = nil
+                isCapturing = false
                 return
             }
 
@@ -129,12 +141,15 @@ final class CaptureCoordinator: ObservableObject {
                         self?.copySelection(selection, requestID: currentID)
                     }, onSave: { [weak self] selection in
                         self?.copySelection(selection, requestID: currentID, save: true)
+                    }, onPin: { [weak self] selection in
+                        self?.copySelection(selection, requestID: currentID, pin: true)
                     }, onCancel: { [weak self] in
                         self?.cancelCapture()
                     })
                 )
             } catch {
                 guard !Task.isCancelled, currentID == requestID else { return }
+                isCapturing = false
                 if error as? CaptureFailure == .permissionDenied {
                     presentedError = .permissionDenied(permission.privacySettingsURL)
                 } else {
@@ -145,6 +160,10 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func updateRegionShortcut(_ shortcut: HotKeyShortcut) {
+        guard shortcut != .pinScreenshot else {
+            presentedError = .shortcutFailed("That shortcut is reserved for Pin Screenshot.")
+            return
+        }
         guard shortcut != windowShortcut else {
             presentedError = .shortcutFailed("That shortcut is already assigned to Window Capture.")
             return
@@ -160,6 +179,10 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func updateWindowShortcut(_ shortcut: HotKeyShortcut) {
+        guard shortcut != .pinScreenshot else {
+            presentedError = .shortcutFailed("That shortcut is reserved for Pin Screenshot.")
+            return
+        }
         guard shortcut != regionShortcut else {
             presentedError = .shortcutFailed("That shortcut is already assigned to Region Capture.")
             return
@@ -209,11 +232,21 @@ final class CaptureCoordinator: ObservableObject {
         requestID &+= 1
         captureTask?.cancel()
         captureTask = nil
+        isCapturing = false
         isCopying = false
         overlay.dismissAll()
     }
 
-    private func copySelection(_ selection: OverlayPresentation, requestID currentID: Int, save: Bool = false) {
+    func pinScreenshot() {
+        guard !isRecordingShortcut, !isCopying else { return }
+        if isCapturing {
+            overlay.pinSelection()
+        } else if let latestScreenshot {
+            pinnedImages.present(latestScreenshot.image, near: latestScreenshot.frame)
+        }
+    }
+
+    private func copySelection(_ selection: OverlayPresentation, requestID currentID: Int, save: Bool = false, pin: Bool = false) {
         guard currentID == requestID, !isCopying, selection.showsToolbar,
               !selection.selection.rect.isEmpty,
               let display = selection.displays.first(where: { $0.id == selection.activeDisplayID }) else { return }
@@ -234,7 +267,10 @@ final class CaptureCoordinator: ObservableObject {
                         regionEnabled: appPreferences.regionShadow, windowEnabled: appPreferences.windowShadow))
                 guard !Task.isCancelled, currentID == requestID else { return }
                 var bookmarkWarning: String?
-                if save {
+                let image = PixelImage(image: rendered, scale: source.scale, colorSpace: source.colorSpace)
+                if pin {
+                    pinnedImages.present(image, near: selection.selection.rect)
+                } else if save {
                     let result = try output.save(rendered, preferences: appPreferences)
                     if result.shouldRememberDirectory {
                         do {
@@ -245,9 +281,11 @@ final class CaptureCoordinator: ObservableObject {
                         }
                     }
                 } else {
-                    try clipboard.write(PixelImage(image: rendered, scale: source.scale, colorSpace: source.colorSpace))
+                    try clipboard.write(image)
                 }
-                feedback.perform(save ? .saved : .copied, preferences: appPreferences)
+                latestScreenshot = (image, selection.selection.rect)
+                if !pin { feedback.perform(save ? .saved : .copied, preferences: appPreferences) }
+                isCapturing = false
                 overlay.dismissAll()
                 presentedError = bookmarkWarning.map(CaptureCoordinatorError.saveDirectoryNotRemembered)
                 NSApp.deactivate()
@@ -280,6 +318,7 @@ final class CaptureCoordinator: ObservableObject {
         isRecordingShortcut = true
         regionHotKey.unregister()
         windowHotKey.unregister()
+        pinHotKey.unregister()
     }
 
     func endShortcutRecording() {
@@ -300,6 +339,13 @@ final class CaptureCoordinator: ObservableObject {
         do {
             try windowHotKey.register(windowShortcut) { [weak self] in
                 self?.startCapture(mode: .window)
+            }
+        } catch {
+            if firstError == nil { firstError = error }
+        }
+        do {
+            try pinHotKey.register(.pinScreenshot) { [weak self] in
+                self?.pinScreenshot()
             }
         } catch {
             if firstError == nil { firstError = error }

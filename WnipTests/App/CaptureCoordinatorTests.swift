@@ -441,6 +441,90 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(overlay.dismissAllCallCount, 2)
     }
 
+    func testPinUsesFrozenRenderedSelectionWithoutWritingClipboard() async throws {
+        let overlay = OverlayFake()
+        let pins = PinnedImagesFake()
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.setString("Keep clipboard", forType: .string)
+        let coordinator = makeCoordinator(permissionGranted: true, overlay: overlay,
+            clipboard: ImageClipboard(pasteboard: pasteboard), pinnedImages: pins)
+        coordinator.startCapture(mode: .region)
+        await coordinator.waitForPendingCaptureForTesting()
+        var selection = try XCTUnwrap(overlay.presentations.first)
+        selection.activeDisplayID = 1
+        selection.showsToolbar = true
+        selection.selection = SelectionModel(rect: CGRect(x: 10, y: 20, width: 30, height: 40))
+        overlay.callbacks[0].onPin(selection)
+        await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertEqual(pins.images.count, 1)
+        XCTAssertEqual(pins.images.first?.image.width, 30)
+        XCTAssertEqual(pins.images.first?.image.height, 40)
+        XCTAssertEqual(pins.frames.first, selection.selection.rect)
+        XCTAssertEqual(pasteboard.string(forType: .string), "Keep clipboard")
+        XCTAssertEqual(overlay.dismissAllCallCount, 2)
+        XCTAssertNil(coordinator.presentedError)
+    }
+
+    func testPinHotKeyUsesLatestCompletedCaptureAndRoutesToActiveEditor() async throws {
+        let overlay = OverlayFake()
+        let pins = PinnedImagesFake()
+        let hotKey = HotKeyFake()
+        let output = RecordingOutput()
+        let coordinator = makeCoordinator(permissionGranted: true, overlay: overlay, output: output,
+            pinHotKey: hotKey, pinnedImages: pins)
+        coordinator.start()
+        XCTAssertEqual(hotKey.shortcut, .pinScreenshot)
+        hotKey.trigger()
+        XCTAssertTrue(pins.images.isEmpty)
+        coordinator.startCapture(mode: .region)
+        await coordinator.waitForPendingCaptureForTesting()
+        hotKey.trigger()
+        XCTAssertEqual(overlay.pinSelectionCallCount, 1)
+        XCTAssertTrue(pins.images.isEmpty)
+        var selection = try XCTUnwrap(overlay.presentations.first)
+        selection.activeDisplayID = 1
+        selection.showsToolbar = true
+        selection.selection = SelectionModel(rect: CGRect(x: 10, y: 20, width: 30, height: 40))
+        overlay.callbacks[0].onSave(selection)
+        await coordinator.waitForPendingCaptureForTesting()
+        hotKey.trigger()
+        XCTAssertEqual(pins.images.count, 1)
+        XCTAssertEqual(pins.images.first?.image.width, 30)
+        coordinator.startCapture(mode: .region)
+        await coordinator.waitForPendingCaptureForTesting()
+        hotKey.trigger()
+        XCTAssertEqual(pins.images.count, 1, "Do not pin a previous screenshot during a new capture")
+        coordinator.cancelCapture()
+        coordinator.beginShortcutRecording()
+        XCTAssertNil(hotKey.shortcut)
+        coordinator.endShortcutRecording()
+        XCTAssertEqual(hotKey.shortcut, .pinScreenshot)
+        coordinator.updateRegionShortcut(.pinScreenshot)
+        coordinator.updateWindowShortcut(.pinScreenshot)
+        XCTAssertEqual(coordinator.regionShortcut, .defaultRegionCapture)
+        XCTAssertEqual(coordinator.windowShortcut, .defaultWindowCapture)
+    }
+
+    func testStaleOrUncommittedSelectionCannotCreatePin() async throws {
+        let overlay = OverlayFake()
+        let pins = PinnedImagesFake()
+        let coordinator = makeCoordinator(permissionGranted: true, overlay: overlay, pinnedImages: pins)
+        coordinator.startCapture(mode: .region)
+        await coordinator.waitForPendingCaptureForTesting()
+        var selection = try XCTUnwrap(overlay.presentations.first)
+        overlay.callbacks[0].onPin(selection)
+        await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertTrue(pins.images.isEmpty)
+        coordinator.cancelCapture()
+        selection.activeDisplayID = 1
+        selection.showsToolbar = true
+        selection.selection = SelectionModel(rect: CGRect(x: 10, y: 20, width: 30, height: 40))
+        overlay.callbacks[0].onPin(selection)
+        await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertTrue(pins.images.isEmpty)
+    }
+
     private func makeCoordinator(
         permissionGranted: Bool = false,
         permission: PermissionFake? = nil,
@@ -450,7 +534,9 @@ final class CaptureCoordinatorTests: XCTestCase {
         windowHotKey: HotKeyFake? = nil,
         preferences: PreferencesFake? = nil,
         clipboard: ImageClipboard? = nil,
-        output: (any OutputServing)? = nil
+        output: (any OutputServing)? = nil,
+        pinHotKey: HotKeyFake? = nil,
+        pinnedImages: PinnedImagesFake? = nil
     ) -> CaptureCoordinator {
         CaptureCoordinator(
             permission: permission ?? PermissionFake(
@@ -462,7 +548,8 @@ final class CaptureCoordinatorTests: XCTestCase {
             regionHotKey: regionHotKey ?? HotKeyFake(),
             windowHotKey: windowHotKey ?? HotKeyFake(),
             preferences: preferences ?? PreferencesFake(),
-            clipboard: clipboard, output: output
+            clipboard: clipboard, output: output,
+            pinHotKey: pinHotKey ?? HotKeyFake(), pinnedImages: pinnedImages ?? PinnedImagesFake()
         )
     }
 }
@@ -571,6 +658,9 @@ private final class OverlayFake: OverlayControlling {
         self.callbacks.append(callbacks)
     }
 
+    var pinSelectionCallCount = 0
+    func pinSelection() { pinSelectionCallCount += 1 }
+
     func update(_ presentation: OverlayPresentation) {}
 
     func dismissAll() {
@@ -653,5 +743,15 @@ private final class RecordingOutput: OutputServing {
         savedPreferences = preferences
         savedSize = CGSize(width: image.width, height: image.height)
         return ScreenshotSaveResult(url: URL(fileURLWithPath: "/tmp/wnip-test.jpg"), shouldRememberDirectory: false)
+    }
+}
+
+@MainActor
+private final class PinnedImagesFake: PinnedImagePresenting {
+    var images: [PixelImage] = []
+    var frames: [CGRect] = []
+    func present(_ image: PixelImage, near selection: CGRect) {
+        images.append(image)
+        frames.append(selection)
     }
 }

@@ -62,6 +62,7 @@ struct SettingsView: View {
                     )
                     .frame(width: 120, height: 28)
                 }
+                LabeledContent("Pin Screenshot", value: "⌘⇧P")
             }
             Section("Output") {
                 Picker("Format", selection: preferenceBinding(\.format)) {

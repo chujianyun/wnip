@@ -9,6 +9,7 @@ struct WnipApp: App {
             Button("Capture Region") { appDelegate.coordinator.startCapture(mode: .region) }
             Button("Capture Window") { appDelegate.coordinator.startCapture(mode: .window) }
             Button("Capture Full Screen") { appDelegate.coordinator.startCapture(mode: .fullScreen) }
+            Button("Pin Screenshot (⌘⇧P)") { appDelegate.coordinator.pinScreenshot() }
             Divider()
             SettingsLink()
             Button("Quit") { NSApplication.shared.terminate(nil) }

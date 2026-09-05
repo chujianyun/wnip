@@ -5,6 +5,17 @@ import XCTest
 
 @MainActor
 final class OverlayControllerTests: XCTestCase {
+    func testPinShortcutRequiresCommandShiftP() {
+        XCTAssertEqual(OverlayKeyboardShortcut.resolve(keyCode: 35,
+            charactersIgnoringModifiers: "P", modifiers: [.command, .shift]), .pin)
+        XCTAssertEqual(OverlayKeyboardShortcut.resolve(keyCode: 35,
+            charactersIgnoringModifiers: "P", modifiers: [.command, .shift, .capsLock]), .pin)
+        for modifiers: NSEvent.ModifierFlags in [[], .command, .shift, [.command, .shift, .option]] {
+            XCTAssertNil(OverlayKeyboardShortcut.resolve(keyCode: 35,
+                charactersIgnoringModifiers: "p", modifiers: modifiers))
+        }
+    }
+
     func testReturnAndKeypadEnterResolveToCopyWithoutModifiers() {
         for keyCode: UInt16 in [36, 76] {
             XCTAssertEqual(OverlayKeyboardShortcut.resolve(keyCode: keyCode,
@@ -113,8 +124,9 @@ final class OverlayControllerTests: XCTestCase {
         let controller = OverlayController()
         var copies: [OverlayPresentation] = []
         var saves: [OverlayPresentation] = []
+        var pins: [OverlayPresentation] = []
         controller.present(OverlayPresentation(mode: .region, displays: [display]),
-            callbacks: OverlayCallbacks(onCopy: { copies.append($0) }, onSave: { saves.append($0) }))
+            callbacks: OverlayCallbacks(onCopy: { copies.append($0) }, onSave: { saves.append($0) }, onPin: { pins.append($0) }))
         defer { controller.dismissAll() }
         let view = try overlayView(displayID: display.id)
         let selection = SelectionModel(rect: display.frame.insetBy(dx: 20, dy: 20))
@@ -127,8 +139,11 @@ final class OverlayControllerTests: XCTestCase {
         model.pointerDown(at: CGPoint(x: 100, y: 220))
         model.pointerUp(at: CGPoint(x: 100, y: 220))
         model.textDraft = "Check"
+        controller.pinSelection()
         view.onToolbarAction(.copy)
         view.onToolbarAction(.save)
+        XCTAssertEqual(pins.first?.annotations.count, 2)
+        XCTAssertEqual(pins.first?.annotations, copies.first?.annotations)
         XCTAssertEqual(copies.first?.annotations.count, 2)
         XCTAssertEqual(saves.first?.annotations, copies.first?.annotations)
         XCTAssertEqual(copies.first?.selection, selection)

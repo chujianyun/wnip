@@ -11,6 +11,11 @@ struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
         modifiers: UInt32(cmdKey | shiftKey)
     )
 
+    static let pinScreenshot = HotKeyShortcut(
+        keyCode: UInt32(kVK_ANSI_P),
+        modifiers: UInt32(cmdKey | shiftKey)
+    )
+
     let keyCode: UInt32
     let modifiers: UInt32
 

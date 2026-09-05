@@ -5,6 +5,7 @@ enum OverlayKeyboardAction: Equatable, Sendable {
     case cancel
     case undo
     case copy
+    case pin
 }
 
 enum OverlayKeyboardShortcut {
@@ -20,6 +21,9 @@ enum OverlayKeyboardShortcut {
         if (keyCode == 36 || keyCode == 76),
            effectiveModifiers.intersection([.command, .control, .option, .shift]).isEmpty {
             return .copy
+        }
+        if effectiveModifiers.subtracting(.capsLock) == [.command, .shift], keyCode == 35 {
+            return .pin
         }
         if effectiveModifiers == .command,
            charactersIgnoringModifiers?.lowercased() == "z" {
@@ -63,6 +67,7 @@ struct OverlayPresentation: Equatable, Sendable {
 struct OverlayCallbacks {
     var onCopy: @MainActor (OverlayPresentation) -> Void = { _ in }
     var onSave: @MainActor (OverlayPresentation) -> Void = { _ in }
+    var onPin: @MainActor (OverlayPresentation) -> Void = { _ in }
     var onCancel: @MainActor () -> Void = {}
     var onUndo: @MainActor () -> Void = {}
     var onSelectionChanged: @MainActor (UInt32, SelectionModel) -> Void = { _, _ in }
@@ -78,6 +83,7 @@ protocol OverlayControlling: AnyObject {
     func present(_ presentation: OverlayPresentation, callbacks: OverlayCallbacks)
     func update(_ presentation: OverlayPresentation)
     func dismissAll()
+    func pinSelection()
 }
 
 @MainActor
@@ -264,6 +270,10 @@ final class OverlayController: OverlayControlling {
         }
     }
 
+    func pinSelection() {
+        routeToolbarAction(.pin)
+    }
+
     private func routeToolbarAction(_ action: OverlayToolbarAction) {
         let viewModel = presentation?.activeDisplayID.flatMap { viewModels[$0] }
         switch action {
@@ -276,13 +286,14 @@ final class OverlayController: OverlayControlling {
                 _ = viewModel?.annotationModel.undo()
             }
             callbacks.onUndo()
-        case .copy, .save:
+        case .copy, .save, .pin:
             guard var presentation, presentation.showsToolbar,
                   !presentation.selection.rect.isEmpty else { return }
             _ = viewModel?.annotationModel.commitActiveTextInput()
             presentation.annotations = viewModel?.annotationModel.document.annotations ?? []
             if action == .copy { callbacks.onCopy(presentation) }
-            else { callbacks.onSave(presentation) }
+            else if action == .save { callbacks.onSave(presentation) }
+            else { callbacks.onPin(presentation) }
         default:
             guard presentation?.showsToolbar == true, let viewModel else { return }
             _ = viewModel.annotationModel.commitActiveTextInput()
@@ -320,6 +331,9 @@ final class OverlayController: OverlayControlling {
                     return event
                 }
                 self.routeToolbarAction(.copy)
+                return nil
+            case .pin:
+                self.pinSelection()
                 return nil
             case nil:
                 return event

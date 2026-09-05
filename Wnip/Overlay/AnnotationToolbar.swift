@@ -14,10 +14,11 @@ enum OverlayToolbarAction: String, CaseIterable, Equatable, Sendable {
     case cancel
     case copy
     case save
+    case pin
 }
 
 struct AnnotationToolbar: View {
-    static let preferredSize = CGSize(width: 486, height: 50)
+    static let preferredSize = CGSize(width: 521, height: 50)
 
     @ObservedObject var model: AnnotationCanvasModel
     let onAction: (OverlayToolbarAction) -> Void
@@ -43,6 +44,7 @@ struct AnnotationToolbar: View {
 
             toolButton(.undo, systemImage: "arrow.uturn.backward")
             toolButton(.cancel, systemImage: "xmark", tint: .red)
+            toolButton(.pin, systemImage: "pin")
             toolButton(.copy, systemImage: "doc.on.doc")
             toolButton(.save, systemImage: "square.and.arrow.down")
         }
@@ -91,7 +93,7 @@ private extension OverlayToolbarAction {
         case .text: .text
         case .highlight: .highlight
         case .step: .step
-        case .undo, .cancel, .copy, .save: nil
+        case .undo, .cancel, .copy, .save, .pin: nil
         }
     }
 
@@ -110,6 +112,7 @@ private extension OverlayToolbarAction {
         case .cancel: "Cancel"
         case .copy: "Copy"
         case .save: "Save"
+        case .pin: "Pin Screenshot (⌘⇧P)"
         }
     }
 }
