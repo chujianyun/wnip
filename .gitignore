@@ -2,6 +2,7 @@
 .worktrees/
 .superpowers/
 DerivedData/
+dist/
 *.xcuserstate
 xcuserdata/
 Wnip.xcodeproj/
