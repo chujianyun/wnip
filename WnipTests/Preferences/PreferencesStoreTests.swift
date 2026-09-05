@@ -32,6 +32,15 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertNil(preferences.saveDirectoryBookmark)
     }
 
+    func testRestoredPreferencesSurviveRoundTripAlongsideBothShortcuts() throws {
+        let preferences = AppPreferences(regionShortcut: .defaultRegionCapture,
+            windowShortcut: .defaultWindowCapture, format: .jpeg, regionShadow: true,
+            windowShadow: false, completionNotificationEnabled: false,
+            completionSoundEnabled: false, hapticFeedbackEnabled: true)
+        try PreferencesStore(defaults: defaults).save(preferences)
+        XCTAssertEqual(try PreferencesStore(defaults: defaults).load(), preferences)
+    }
+
     func testSavesCodablePreferencesAcrossStoreInstances() throws {
         let preferences = AppPreferences(
             regionShortcut: HotKeyShortcut(keyCode: 12, modifiers: 34),

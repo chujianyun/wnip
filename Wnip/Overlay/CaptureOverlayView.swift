@@ -4,9 +4,13 @@ import SwiftUI
 final class CaptureOverlayViewModel: ObservableObject {
     let display: DisplayDescriptor
     @Published private(set) var visibleFrame: CGRect
+    let annotationModel = AnnotationCanvasModel()
+    @Published var isAnnotating = false
+    let sourceImage: NSImage?
     @Published var presentation: OverlayPresentation
 
     init(display: DisplayDescriptor, visibleFrame: CGRect, presentation: OverlayPresentation) {
+        self.sourceImage = presentation.sourceImages[display.id].map { NSImage(cgImage: $0.image, size: display.frame.size) }
         self.display = display
         self.visibleFrame = visibleFrame
         self.presentation = presentation
@@ -34,8 +38,19 @@ struct CaptureOverlayView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
+                if let sourceImage = viewModel.sourceImage {
+                    Image(nsImage: sourceImage).resizable()
+                        .frame(width: proxy.size.width, height: proxy.size.height).allowsHitTesting(false)
+                }
                 interactionSurface
                 mask(size: proxy.size)
+
+                if showsToolbar, viewModel.isAnnotating, let highlightedRect {
+                    AnnotationCanvas(model: viewModel.annotationModel, sourceImage: viewModel.sourceImage,
+                                     viewport: highlightedRect, parameterControlsFrame: parameterControlsRect)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .zIndex(1)
+                }
 
                 if let highlightedRect {
                     selectionBorder(for: highlightedRect)
@@ -48,7 +63,8 @@ struct CaptureOverlayView: View {
                 }
 
                 if showsToolbar, let toolbarRect {
-                    AnnotationToolbar(onAction: onToolbarAction)
+                    AnnotationToolbar(model: viewModel.annotationModel, onAction: onToolbarAction)
+                        .zIndex(2)
                         .frame(width: toolbarRect.width, height: toolbarRect.height)
                         .position(x: toolbarRect.midX, y: toolbarRect.midY)
                 }
@@ -62,7 +78,7 @@ struct CaptureOverlayView: View {
     private var interactionSurface: some View {
         Rectangle()
             .fill(Color.clear)
-            .contentShape(Rectangle())
+            .contentShape(OverlayInteractionSurface(excludedRects: interactionExclusions), eoFill: true)
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let location):
@@ -81,6 +97,16 @@ struct CaptureOverlayView: View {
                     .onChanged(handleDragChanged)
                     .onEnded(handleDragEnded)
             )
+    }
+
+    private var interactionExclusions: [CGRect] {
+        guard showsToolbar else { return [] }
+        var rects = toolbarRect.map { [$0] } ?? []
+        if viewModel.isAnnotating, let highlightedRect {
+            rects.append(highlightedRect)
+            if let parameterControlsRect { rects.append(parameterControlsRect) }
+        }
+        return rects
     }
 
     private var highlightedGlobalRect: CGRect? {
@@ -127,6 +153,16 @@ struct CaptureOverlayView: View {
             forGlobalRect: globalFrame,
             in: viewModel.display.frame
         )
+    }
+
+    private var parameterControlsRect: CGRect? {
+        guard showsToolbar else { return nil }
+        let frame = AnnotationParameterControlsPlacement.resolve(
+            selection: viewModel.presentation.selection.rect, visibleFrame: viewModel.visibleFrame,
+            controlsSize: AnnotationParameterControls.preferredSize,
+            toolbarFrame: ToolbarPlacement.resolve(selection: viewModel.presentation.selection.rect,
+                visibleFrame: viewModel.visibleFrame, toolbarSize: AnnotationToolbar.preferredSize))
+        return OverlayInteractionGeometry.localRect(forGlobalRect: frame, in: viewModel.display.frame)
     }
 
     private func mask(size: CGSize) -> some View {
@@ -210,6 +246,7 @@ struct CaptureOverlayView: View {
     }
 
     private func handleDragChanged(_ value: DragGesture.Value) {
+        guard !interactionExclusions.contains(where: { $0.contains(value.startLocation) }) else { return }
         let display = viewModel.display
         let currentPoint = OverlayInteractionGeometry.globalPoint(
             forLocalPoint: value.location,
@@ -278,5 +315,15 @@ struct CaptureOverlayView: View {
         case .fullScreen:
             onDisplaySelected(display)
         }
+    }
+}
+
+private struct OverlayInteractionSurface: Shape {
+    let excludedRects: [CGRect]
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect)
+        for excluded in excludedRects { path.addRect(excluded) }
+        return path
     }
 }

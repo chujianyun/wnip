@@ -8,6 +8,18 @@ struct AppPreferences: Codable, Equatable, Sendable {
     var windowShortcut: HotKeyShortcut
     var filenameRule: String
     var jpegQuality: Double
+    static let defaultFormat: ScreenshotFormat = .png
+    var format: ScreenshotFormat
+    static let defaultRegionShadow: Bool = false
+    var regionShadow: Bool
+    static let defaultWindowShadow: Bool = true
+    var windowShadow: Bool
+    static let defaultCompletionNotificationEnabled: Bool = true
+    var completionNotificationEnabled: Bool
+    static let defaultCompletionSoundEnabled: Bool = true
+    var completionSoundEnabled: Bool
+    static let defaultHapticFeedbackEnabled: Bool = false
+    var hapticFeedbackEnabled: Bool
     var saveDirectoryBookmark: Data?
 
     init(
@@ -15,12 +27,24 @@ struct AppPreferences: Codable, Equatable, Sendable {
         windowShortcut: HotKeyShortcut = .defaultWindowCapture,
         filenameRule: String = AppPreferences.defaultFilenameRule,
         jpegQuality: Double = AppPreferences.defaultJPEGQuality,
+        format: ScreenshotFormat = AppPreferences.defaultFormat,
+        regionShadow: Bool = AppPreferences.defaultRegionShadow,
+        windowShadow: Bool = AppPreferences.defaultWindowShadow,
+        completionNotificationEnabled: Bool = AppPreferences.defaultCompletionNotificationEnabled,
+        completionSoundEnabled: Bool = AppPreferences.defaultCompletionSoundEnabled,
+        hapticFeedbackEnabled: Bool = AppPreferences.defaultHapticFeedbackEnabled,
         saveDirectoryBookmark: Data? = nil
     ) {
         self.regionShortcut = regionShortcut
         self.windowShortcut = windowShortcut
         self.filenameRule = filenameRule
         self.jpegQuality = jpegQuality
+        self.format = format
+        self.regionShadow = regionShadow
+        self.windowShadow = windowShadow
+        self.completionNotificationEnabled = completionNotificationEnabled
+        self.completionSoundEnabled = completionSoundEnabled
+        self.hapticFeedbackEnabled = hapticFeedbackEnabled
         self.saveDirectoryBookmark = saveDirectoryBookmark
     }
 
@@ -30,6 +54,12 @@ struct AppPreferences: Codable, Equatable, Sendable {
         case shortcut
         case filenameRule
         case jpegQuality
+        case format
+        case regionShadow
+        case windowShadow
+        case completionNotificationEnabled
+        case completionSoundEnabled
+        case hapticFeedbackEnabled
         case saveDirectoryBookmark
     }
 
@@ -52,6 +82,12 @@ struct AppPreferences: Codable, Equatable, Sendable {
             ?? Self.defaultFilenameRule
         jpegQuality = try container.decodeIfPresent(Double.self, forKey: .jpegQuality)
             ?? Self.defaultJPEGQuality
+        format = try container.decodeIfPresent(ScreenshotFormat.self, forKey: .format) ?? Self.defaultFormat
+        regionShadow = try container.decodeIfPresent(Bool.self, forKey: .regionShadow) ?? Self.defaultRegionShadow
+        windowShadow = try container.decodeIfPresent(Bool.self, forKey: .windowShadow) ?? Self.defaultWindowShadow
+        completionNotificationEnabled = try container.decodeIfPresent(Bool.self, forKey: .completionNotificationEnabled) ?? Self.defaultCompletionNotificationEnabled
+        completionSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .completionSoundEnabled) ?? Self.defaultCompletionSoundEnabled
+        hapticFeedbackEnabled = try container.decodeIfPresent(Bool.self, forKey: .hapticFeedbackEnabled) ?? Self.defaultHapticFeedbackEnabled
         saveDirectoryBookmark = try container.decodeIfPresent(Data.self, forKey: .saveDirectoryBookmark)
     }
 
@@ -61,6 +97,12 @@ struct AppPreferences: Codable, Equatable, Sendable {
         try container.encode(windowShortcut, forKey: .windowShortcut)
         try container.encode(filenameRule, forKey: .filenameRule)
         try container.encode(jpegQuality, forKey: .jpegQuality)
+        try container.encode(format, forKey: .format)
+        try container.encode(regionShadow, forKey: .regionShadow)
+        try container.encode(windowShadow, forKey: .windowShadow)
+        try container.encode(completionNotificationEnabled, forKey: .completionNotificationEnabled)
+        try container.encode(completionSoundEnabled, forKey: .completionSoundEnabled)
+        try container.encode(hapticFeedbackEnabled, forKey: .hapticFeedbackEnabled)
         try container.encodeIfPresent(saveDirectoryBookmark, forKey: .saveDirectoryBookmark)
     }
 }

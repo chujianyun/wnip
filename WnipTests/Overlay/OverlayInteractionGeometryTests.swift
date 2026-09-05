@@ -151,6 +151,27 @@ final class OverlayInteractionGeometryTests: XCTestCase {
         )
     }
 
+    func testCommittedSelectionDoesNotRestartFromCanvasOrOutsideClicks() {
+        let selection = CGRect(x: 100, y: 100, width: 800, height: 400)
+        for mode: CaptureMode in [.region, .window, .fullScreen] {
+            for point in [CGPoint(x: 200, y: 200), CGPoint(x: 200, y: 70)] {
+                let drag = OverlayInteractionGeometry.selectionDrag(
+                    at: point, mode: mode, showsToolbar: true, selection: selection)
+                XCTAssertNil(drag, "Committed \(mode) selection must not restart")
+                XCTAssertEqual(OverlayInteractionGeometry.updatedSelection(
+                    SelectionModel(rect: selection), drag: drag, from: point,
+                    to: CGPoint(x: 500, y: 350),
+                    within: CGRect(x: 0, y: 0, width: 1920, height: 1080)).rect, selection)
+            }
+        }
+    }
+
+    func testRegionStillStartsSelectionBeforeCommit() {
+        XCTAssertEqual(OverlayInteractionGeometry.selectionDrag(
+            at: CGPoint(x: 200, y: 200), mode: .region,
+            showsToolbar: false, selection: .zero), .newSelection)
+    }
+
     private func candidate(id: UInt32, frame: CGRect) -> CaptureCandidateWindow {
         CaptureCandidateWindow(
             id: id,

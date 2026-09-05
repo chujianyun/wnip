@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 @MainActor
 final class ImageClipboard {
@@ -39,5 +40,28 @@ enum ScreenshotCrop {
             throw CaptureFailure.invalidSelection
         }
         return PixelImage(image: cropped, scale: image.scale, colorSpace: image.colorSpace)
+    }
+}
+
+@MainActor
+enum ScreenshotAnnotations {
+    /// Overlay annotations use display-local points with a top-left origin.
+    static func render(_ image: PixelImage, annotations: [Annotation],
+                       selection: CGRect, display: DisplayDescriptor) throws -> PixelImage {
+        guard !annotations.isEmpty else { return image }
+        let local = OverlayInteractionGeometry.localRect(forGlobalRect: selection, in: display.frame)
+        guard !local.isEmpty else { throw CaptureFailure.invalidSelection }
+        let translated = annotations.map { $0.translated(by: CGSize(width: -local.minX, height: -local.minY)) }
+        let model = AnnotationCanvasModel(document: AnnotationDocument(
+            annotations: translated, sourceBounds: CGRect(origin: .zero, size: local.size)))
+        let content = AnnotationCanvas(model: model,
+            sourceImage: NSImage(cgImage: image.image, size: local.size), showsEditingControls: false)
+            .frame(width: local.width, height: local.height)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = CGFloat(image.image.width) / local.width
+        guard let rendered = renderer.cgImage else {
+            throw CaptureFailure.captureFailed("The annotations could not be rendered.")
+        }
+        return PixelImage(image: rendered, scale: image.scale, colorSpace: image.colorSpace)
     }
 }

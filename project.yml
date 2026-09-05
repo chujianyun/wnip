@@ -9,6 +9,7 @@ targets:
     sources:
       - path: Wnip
     settings:
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       PRODUCT_BUNDLE_IDENTIFIER: com.wnip.app
       INFOPLIST_KEY_LSUIElement: true
       GENERATE_INFOPLIST_FILE: YES

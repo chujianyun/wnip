@@ -31,10 +31,10 @@ final class CaptureCoordinatorTests: XCTestCase {
             let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
             XCTAssertNotNil(pasteboard.data(forType: .tiff))
             XCTAssertFalse((pasteboard.readObjects(forClasses: [NSImage.self]) ?? []).isEmpty)
-            XCTAssertEqual(bitmap.pixelsWide, mode == .region ? 30 : 100)
-            XCTAssertEqual(bitmap.pixelsHigh, mode == .region ? 40 : 100)
-            XCTAssertEqual(screen.windowCaptureCount, mode == .window ? 1 : 0)
-            XCTAssertEqual(screen.displayCaptureCount, mode == .window ? 0 : 1)
+            XCTAssertEqual(bitmap.pixelsWide, mode == .window ? 98 : (mode == .region ? 30 : 100))
+            XCTAssertEqual(bitmap.pixelsHigh, mode == .window ? 108 : (mode == .region ? 40 : 100))
+            XCTAssertEqual(screen.windowCaptureCount, 0)
+            XCTAssertEqual(screen.displayCaptureCount, 1)
             XCTAssertEqual(overlay.dismissAllCallCount, 2)
         }
     }
@@ -59,7 +59,7 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), "Existing clipboard")
     }
 
-    func testCaptureFailureKeepsSelectionAndClipboardAndAllowsRetry() async throws {
+    func testCaptureFailureKeepsClipboardAndCanRestartCapture() async throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         pasteboard.setString("Keep", forType: .string)
@@ -70,20 +70,22 @@ final class CaptureCoordinatorTests: XCTestCase {
             clipboard: ImageClipboard(pasteboard: pasteboard))
         coordinator.startCapture(mode: .fullScreen)
         await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertTrue(overlay.presentations.isEmpty)
+        XCTAssertEqual(pasteboard.string(forType: .string), "Keep")
+        XCTAssertNotNil(coordinator.presentedError)
+        screen.captureError = nil
+        coordinator.startCapture(mode: .fullScreen)
+        await coordinator.waitForPendingCaptureForTesting()
         var selection = try XCTUnwrap(overlay.presentations.first)
         selection.showsToolbar = true
         selection.activeDisplayID = 1
         selection.selection = SelectionModel(rect: ScreenCaptureFake.fixture.displays[0].frame)
-        overlay.callbacks[0].onCopy(selection)
-        await coordinator.waitForPendingCaptureForTesting()
-        XCTAssertEqual(pasteboard.string(forType: .string), "Keep")
-        XCTAssertEqual(overlay.dismissAllCallCount, 1)
-        XCTAssertNotNil(coordinator.presentedError)
-        screen.captureError = nil
+        // Export must use the frozen source even if live capture subsequently fails.
+        screen.captureError = CaptureFailure.unavailable
         overlay.callbacks[0].onCopy(selection)
         await coordinator.waitForPendingCaptureForTesting()
         XCTAssertNotNil(pasteboard.data(forType: .png))
-        XCTAssertEqual(overlay.dismissAllCallCount, 2)
+        XCTAssertEqual(screen.displayCaptureCount, 2)
         XCTAssertNil(coordinator.presentedError)
     }
 
@@ -104,6 +106,34 @@ final class CaptureCoordinatorTests: XCTestCase {
         let color = try XCTUnwrap(NSBitmapImageRep(cgImage: cropped.image).colorAt(x: 0, y: 0)?.usingColorSpace(.deviceRGB))
         XCTAssertGreaterThan(color.redComponent, 0.9)
         XCTAssertLessThan(color.blueComponent, 0.1)
+    }
+
+    func testExportCompositesAnnotationsAtCropOriginAndRetinaScaleWithoutEditingControls() throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 200, height: 100,
+            bitsPerComponent: 8, bytesPerRow: 800, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
+        let original = PixelImage(image: try XCTUnwrap(context.makeImage()), scale: 2)
+        let display = DisplayDescriptor(id: 1, frame: CGRect(x: -300, y: 50, width: 500, height: 300), scale: 2)
+        // Crop origin is (50, 60) in display-local top-left points.
+        let selection = CGRect(x: -250, y: 240, width: 100, height: 50)
+        let annotation = Annotation(content: .rectangle(CGRect(x: 60, y: 70, width: 40, height: 20)),
+                                    parameters: AnnotationTool.rectangle.defaultParameters)
+        let output = try ScreenshotAnnotations.render(original, annotations: [annotation],
+                                                       selection: selection, display: display)
+        XCTAssertEqual(output.image.width, 200)
+        XCTAssertEqual(output.image.height, 100)
+        let bitmap = NSBitmapImageRep(cgImage: output.image)
+        let stroke = try XCTUnwrap(bitmap.colorAt(x: 40, y: 20)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(stroke.redComponent, 0.8)
+        XCTAssertLessThan(stroke.greenComponent, 0.3)
+        for point in [(2, 2), (120, 80), (60, 40)] {
+            let background = try XCTUnwrap(bitmap.colorAt(x: point.0, y: point.1)?.usingColorSpace(.deviceRGB))
+            XCTAssertGreaterThan(background.redComponent, 0.95)
+            XCTAssertGreaterThan(background.greenComponent, 0.95)
+            XCTAssertGreaterThan(background.blueComponent, 0.95)
+        }
     }
 
     func testErrorPresentationMatchesPermissionCaptureAndShortcutFailures() {
@@ -188,7 +218,7 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(permission.authorizationRequestCallCount, 1)
         XCTAssertEqual(screen.availableContentCallCount, 0)
         XCTAssertTrue(overlay.presentations.isEmpty)
-        XCTAssertEqual(coordinator.presentedError, CaptureCoordinatorError.permissionDenied(permission.privacySettingsURL))
+        XCTAssertNil(coordinator.presentedError, "The system authorization dialog must not trigger a second application alert")
     }
 
     func testCancelCaptureDismissesOverlays() {
@@ -364,6 +394,53 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(windowHotKey.shortcut, .defaultWindowCapture)
     }
 
+    func testSaveCallbackUsesRestoredPreferencesAndFrozenImage() async throws {
+        let output = RecordingOutput()
+        let preferences = PreferencesFake()
+        let overlay = OverlayFake()
+        let coordinator = makeCoordinator(permissionGranted: true, overlay: overlay,
+            preferences: preferences, output: output)
+        coordinator.start()
+        coordinator.updatePreference(\.format, to: .jpeg)
+        coordinator.updatePreference(\.completionSoundEnabled, to: false)
+        coordinator.startCapture(mode: .region)
+        await coordinator.waitForPendingCaptureForTesting()
+        var selection = try XCTUnwrap(overlay.presentations.first)
+        selection.activeDisplayID = 1
+        selection.showsToolbar = true
+        selection.selection = SelectionModel(rect: CGRect(x: 10, y: 20, width: 30, height: 40))
+        overlay.callbacks[0].onSave(selection)
+        await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertEqual(output.savedPreferences?.format, .jpeg)
+        XCTAssertEqual(output.savedPreferences?.completionSoundEnabled, false)
+        XCTAssertEqual(output.savedPreferences?.regionShortcut, .defaultRegionCapture)
+        XCTAssertEqual(output.savedPreferences?.windowShortcut, .defaultWindowCapture)
+        XCTAssertEqual(output.savedSize, CGSize(width: 30, height: 40))
+        XCTAssertEqual(overlay.dismissAllCallCount, 2)
+        XCTAssertNil(coordinator.presentedError)
+    }
+
+    func testCancelledSaveKeepsEditorAndCanRetry() async throws {
+        let output = RecordingOutput()
+        output.cancelSave = true
+        let overlay = OverlayFake()
+        let coordinator = makeCoordinator(permissionGranted: true, overlay: overlay, output: output)
+        coordinator.startCapture(mode: .region)
+        await coordinator.waitForPendingCaptureForTesting()
+        var selection = try XCTUnwrap(overlay.presentations.first)
+        selection.activeDisplayID = 1
+        selection.showsToolbar = true
+        selection.selection = SelectionModel(rect: CGRect(x: 10, y: 20, width: 30, height: 40))
+        overlay.callbacks[0].onSave(selection)
+        await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertEqual(overlay.dismissAllCallCount, 1)
+        XCTAssertNil(coordinator.presentedError)
+        output.cancelSave = false
+        overlay.callbacks[0].onSave(selection)
+        await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertEqual(overlay.dismissAllCallCount, 2)
+    }
+
     private func makeCoordinator(
         permissionGranted: Bool = false,
         permission: PermissionFake? = nil,
@@ -372,7 +449,8 @@ final class CaptureCoordinatorTests: XCTestCase {
         regionHotKey: HotKeyFake? = nil,
         windowHotKey: HotKeyFake? = nil,
         preferences: PreferencesFake? = nil,
-        clipboard: ImageClipboard? = nil
+        clipboard: ImageClipboard? = nil,
+        output: (any OutputServing)? = nil
     ) -> CaptureCoordinator {
         CaptureCoordinator(
             permission: permission ?? PermissionFake(
@@ -384,7 +462,7 @@ final class CaptureCoordinatorTests: XCTestCase {
             regionHotKey: regionHotKey ?? HotKeyFake(),
             windowHotKey: windowHotKey ?? HotKeyFake(),
             preferences: preferences ?? PreferencesFake(),
-            clipboard: clipboard
+            clipboard: clipboard, output: output
         )
     }
 }
@@ -562,4 +640,18 @@ private final class PreferencesFake: PreferencesStoring {
     }
 
     func replaceSaveDirectoryBookmark(for directory: URL) throws {}
+}
+
+@MainActor
+private final class RecordingOutput: OutputServing {
+    var cancelSave = false
+    var savedPreferences: AppPreferences?
+    var savedSize: CGSize?
+    func copy(_ image: CGImage) throws { }
+    func save(_ image: CGImage, preferences: AppPreferences) throws -> ScreenshotSaveResult {
+        if cancelSave { throw OutputFailure.cancelled }
+        savedPreferences = preferences
+        savedSize = CGSize(width: image.width, height: image.height)
+        return ScreenshotSaveResult(url: URL(fileURLWithPath: "/tmp/wnip-test.jpg"), shouldRememberDirectory: false)
+    }
 }

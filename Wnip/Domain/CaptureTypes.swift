@@ -57,7 +57,11 @@ struct DisplayDescriptor: Equatable, Sendable {
     }
 }
 
-struct PixelImage {
+struct PixelImage: Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.image === rhs.image && lhs.scale == rhs.scale && lhs.colorSpace == rhs.colorSpace
+    }
+
     let image: CGImage
     let scale: CGFloat
     let colorSpace: CGColorSpace

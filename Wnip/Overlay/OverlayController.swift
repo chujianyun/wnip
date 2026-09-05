@@ -38,6 +38,8 @@ struct OverlayPresentation: Equatable, Sendable {
     var activeDisplayID: UInt32?
     var showsToolbar: Bool
     var selectedWindow: CaptureCandidateWindow?
+    var annotations: [Annotation] = []
+    var sourceImages: [UInt32: PixelImage] = [:]
 
     init(
         mode: CaptureMode,
@@ -60,6 +62,7 @@ struct OverlayPresentation: Equatable, Sendable {
 
 struct OverlayCallbacks {
     var onCopy: @MainActor (OverlayPresentation) -> Void = { _ in }
+    var onSave: @MainActor (OverlayPresentation) -> Void = { _ in }
     var onCancel: @MainActor () -> Void = {}
     var onUndo: @MainActor () -> Void = {}
     var onSelectionChanged: @MainActor (UInt32, SelectionModel) -> Void = { _, _ in }
@@ -262,16 +265,30 @@ final class OverlayController: OverlayControlling {
     }
 
     private func routeToolbarAction(_ action: OverlayToolbarAction) {
+        let viewModel = presentation?.activeDisplayID.flatMap { viewModels[$0] }
         switch action {
         case .cancel:
             callbacks.onCancel()
         case .undo:
+            if viewModel?.annotationModel.textEditorOrigin != nil {
+                viewModel?.annotationModel.cancelTextEditing()
+            } else {
+                _ = viewModel?.annotationModel.undo()
+            }
             callbacks.onUndo()
-        case .copy:
-            guard let presentation, presentation.showsToolbar,
+        case .copy, .save:
+            guard var presentation, presentation.showsToolbar,
                   !presentation.selection.rect.isEmpty else { return }
-            callbacks.onCopy(presentation)
+            _ = viewModel?.annotationModel.commitActiveTextInput()
+            presentation.annotations = viewModel?.annotationModel.document.annotations ?? []
+            if action == .copy { callbacks.onCopy(presentation) }
+            else { callbacks.onSave(presentation) }
         default:
+            guard presentation?.showsToolbar == true, let viewModel else { return }
+            _ = viewModel.annotationModel.commitActiveTextInput()
+            if viewModel.annotationModel.handleToolbarAction(action) {
+                viewModel.isAnnotating = true
+            }
             callbacks.onToolbarAction(action)
         }
     }
@@ -286,10 +303,16 @@ final class OverlayController: OverlayControlling {
                 modifiers: event.modifierFlags
             ) {
             case .cancel:
+                if self.windows.values.contains(where: { $0.firstResponder is NSTextView }) {
+                    return event
+                }
                 self.callbacks.onCancel()
                 return nil
             case .undo:
-                self.callbacks.onUndo()
+                if self.windows.values.contains(where: { $0.firstResponder is NSTextView }) {
+                    return event
+                }
+                self.routeToolbarAction(.undo)
                 return nil
             case .copy:
                 // Let text editors consume Return while entering an annotation.

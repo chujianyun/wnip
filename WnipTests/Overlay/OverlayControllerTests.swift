@@ -86,6 +86,59 @@ final class OverlayControllerTests: XCTestCase {
         XCTAssertEqual(view.viewModel.presentation.selection.rect, view.viewModel.display.frame)
     }
 
+    func testToolbarDrawUndoAndExportKeepCommittedSelection() throws {
+        for mode: CaptureMode in [.region, .window, .fullScreen] {
+            let (controller, view) = try makeWindowOverlay(mode: mode)
+            defer { controller.dismissAll() }
+            let display = view.viewModel.display
+            let selection = SelectionModel(rect: display.frame.insetBy(dx: 20, dy: 20))
+            view.onSelectionCommitted(display.id, selection)
+            view.onToolbarAction(.ellipse)
+            XCTAssertTrue(view.viewModel.isAnnotating)
+            let model = view.viewModel.annotationModel
+            model.gestureChanged(startLocation: CGPoint(x: 100, y: 100), location: CGPoint(x: 200, y: 150))
+            model.gestureEnded(startLocation: CGPoint(x: 100, y: 100), location: CGPoint(x: 200, y: 150))
+            XCTAssertEqual(model.document.annotations.first?.content,
+                           .ellipse(CGRect(x: 100, y: 100, width: 100, height: 50)))
+            XCTAssertEqual(view.viewModel.presentation.selection, selection)
+            view.onToolbarAction(.undo)
+            XCTAssertTrue(model.document.annotations.isEmpty)
+            XCTAssertEqual(view.viewModel.presentation.selection, selection)
+        }
+    }
+
+    func testCopyAndSaveIncludeDrawnAndPendingTextAnnotations() throws {
+        let display = DisplayDescriptor(id: UInt32.max - 3,
+            frame: CGRect(x: 50_000, y: 50_000, width: 800, height: 600), scale: 1)
+        let controller = OverlayController()
+        var copies: [OverlayPresentation] = []
+        var saves: [OverlayPresentation] = []
+        controller.present(OverlayPresentation(mode: .region, displays: [display]),
+            callbacks: OverlayCallbacks(onCopy: { copies.append($0) }, onSave: { saves.append($0) }))
+        defer { controller.dismissAll() }
+        let view = try overlayView(displayID: display.id)
+        let selection = SelectionModel(rect: display.frame.insetBy(dx: 20, dy: 20))
+        view.onSelectionCommitted(display.id, selection)
+        view.onToolbarAction(.rectangle)
+        let model = view.viewModel.annotationModel
+        model.gestureChanged(startLocation: CGPoint(x: 80, y: 80), location: CGPoint(x: 180, y: 180))
+        model.gestureEnded(startLocation: CGPoint(x: 80, y: 80), location: CGPoint(x: 180, y: 180))
+        view.onToolbarAction(.text)
+        model.pointerDown(at: CGPoint(x: 100, y: 220))
+        model.pointerUp(at: CGPoint(x: 100, y: 220))
+        model.textDraft = "Check"
+        view.onToolbarAction(.copy)
+        view.onToolbarAction(.save)
+        XCTAssertEqual(copies.first?.annotations.count, 2)
+        XCTAssertEqual(saves.first?.annotations, copies.first?.annotations)
+        XCTAssertEqual(copies.first?.selection, selection)
+        XCTAssertNil(model.textEditorOrigin)
+        controller.present(OverlayPresentation(mode: .region, displays: [display]), callbacks: OverlayCallbacks())
+        let next = try overlayView(displayID: display.id)
+        XCTAssertFalse(next.viewModel.isAnnotating)
+        XCTAssertTrue(next.viewModel.annotationModel.document.annotations.isEmpty)
+    }
+
     private func makeWindowOverlay(mode: CaptureMode = .window) throws -> (OverlayController, CaptureOverlayView) {
         let display = DisplayDescriptor(id: UInt32.max - 2,
             frame: CGRect(x: 50_000, y: 50_000, width: 800, height: 600), scale: 1)

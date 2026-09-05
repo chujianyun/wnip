@@ -150,6 +150,41 @@ struct AnnotationCanvasTextLayout: Equatable, Sendable {
     }
 }
 
+struct AnnotationTextEditorLayout: Equatable, Sendable {
+    let frame: CGRect
+
+    init(origin: CGPoint, value: String, fontSize: CGFloat, maxWidth: CGFloat) {
+        let resolvedFontSize = fontSize.isFinite ? max(1, fontSize) : 1
+        let measured = AnnotationTextGeometry(
+            origin: .zero,
+            value: value.isEmpty ? "M" : value,
+            fontSize: resolvedFontSize
+        ).frame
+        let desiredWidth = max(resolvedFontSize * 2, measured.width + 12)
+        let availableWidth = maxWidth.isFinite ? max(1, maxWidth) : 1
+        frame = CGRect(
+            origin: origin,
+            size: CGSize(
+                width: min(desiredWidth, availableWidth),
+                height: max(resolvedFontSize * 1.4, measured.height + 6)
+            )
+        )
+    }
+}
+
+@MainActor
+enum AnnotationTextInput {
+    static var activeEditorValue: String? {
+        let keyWindow = NSApp.keyWindow
+        let candidateWindows = [keyWindow].compactMap { $0 } + NSApp.windows.filter { $0 !== keyWindow }
+        return candidateWindows.lazy.compactMap { window in
+            guard let fieldEditor = window.firstResponder as? NSTextView,
+                  fieldEditor.isFieldEditor else { return nil }
+            return fieldEditor.string
+        }.first
+    }
+}
+
 struct AnnotationCanvasRenderSegment: Equatable, Sendable {
     let start: CGPoint
     let end: CGPoint
@@ -242,6 +277,7 @@ final class AnnotationCanvasModel: ObservableObject {
 
     @discardableResult
     func handleToolbarAction(_ action: OverlayToolbarAction) -> Bool {
+        if textEditorOrigin != nil, action != .cancel { _ = commitActiveTextInput() }
         let tool: AnnotationTool
         switch action {
         case .rectangle: tool = .rectangle
@@ -260,6 +296,7 @@ final class AnnotationCanvasModel: ObservableObject {
     }
 
     func pointerDown(at point: CGPoint) {
+        if textEditorOrigin != nil { _ = commitActiveTextInput() }
         if interactionMode == .selecting,
            let annotation = document.hitTest(point) {
             selectedAnnotationID = annotation.id
@@ -356,6 +393,11 @@ final class AnnotationCanvasModel: ObservableObject {
             selectedAnnotationID = annotation.id
         }
         return committed
+    }
+
+    @discardableResult
+    func commitActiveTextInput() -> Bool {
+        commitText(AnnotationTextInput.activeEditorValue ?? textDraft)
     }
 
     func cancelTextEditing() {
@@ -463,6 +505,11 @@ final class AnnotationCanvasModel: ObservableObject {
 struct AnnotationCanvas: View {
     @ObservedObject var model: AnnotationCanvasModel
     var sourceImage: NSImage?
+    var viewport: CGRect? = nil
+    var showsEditingControls = true
+    var parameterControlsFrame: CGRect? = nil
+    var displaysParameterControls = true
+    @StateObject private var mosaicImageCache = AnnotationCanvasMosaicImageCache()
 
     @FocusState private var isTextFieldFocused: Bool
     @State private var cursorState = AnnotationCanvasCursorState()
@@ -470,6 +517,8 @@ struct AnnotationCanvas: View {
     var body: some View {
         GeometryReader { proxy in
             if let transform = canvasTransform(canvasSize: proxy.size) {
+                let pixelatedSource = model.renderItems.contains(where: { $0.annotation.tool == .mosaic })
+                    ? sourceImage.flatMap { mosaicImageCache.image(for: $0) } : nil
                 ZStack(alignment: .topLeading) {
                     ZStack(alignment: .topLeading) {
                         if let sourceImage {
@@ -480,8 +529,12 @@ struct AnnotationCanvas: View {
                                 .position(x: imageFrame.midX, y: imageFrame.midY)
                         }
 
+                        if let pixelatedSource {
+                            mosaicOverlay(image: pixelatedSource, transform: transform, canvasSize: proxy.size)
+                        }
                         Canvas { context, _ in
                             for item in model.renderItems {
+                                if item.annotation.tool == .mosaic { continue }
                                 draw(
                                     transform.canvasAnnotation(item.annotation),
                                     in: &context,
@@ -489,7 +542,7 @@ struct AnnotationCanvas: View {
                                 )
                             }
                         }
-                        .contentShape(AnnotationCanvasViewportShape(rect: transform.visibleCanvasRect))
+                        .contentShape(AnnotationCanvasViewportShape(rect: viewport ?? transform.visibleCanvasRect))
                         .gesture(canvasDrag(transform: transform))
                         .onHover { inside in
                             cursorState.setPointerInside(inside, activeCursor: model.cursorKind)
@@ -500,7 +553,7 @@ struct AnnotationCanvas: View {
                             cursorState.displayedCursor.nsCursor.set()
                         }
 
-                        if let selectedAnnotation = model.selectedAnnotation {
+                        if showsEditingControls, let selectedAnnotation = model.selectedAnnotation {
                             selectionHandles(for: transform.canvasAnnotation(selectedAnnotation).bounds)
                         }
 
@@ -509,26 +562,40 @@ struct AnnotationCanvas: View {
                             let canvasFontSize = transform.canvasLength(
                                 forSourceLength: model.parameters.fontSize
                             )
+                            let editorLayout = AnnotationTextEditorLayout(
+                                origin: canvasOrigin,
+                                value: model.textDraft,
+                                fontSize: canvasFontSize,
+                                maxWidth: transform.visibleCanvasRect.maxX - canvasOrigin.x
+                            )
                             TextField("Text", text: $model.textDraft)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: canvasFontSize))
                                 .foregroundStyle(model.parameters.color.swiftUIColor)
                                 .padding(.horizontal, 4)
-                                .frame(minWidth: 120, minHeight: canvasFontSize * 1.4)
+                                .frame(
+                                    width: editorLayout.frame.width,
+                                    height: editorLayout.frame.height,
+                                    alignment: .leading
+                                )
                                 .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 3))
                                 .position(
-                                    x: canvasOrigin.x + 60,
-                                    y: canvasOrigin.y + canvasFontSize * 0.7
+                                    x: editorLayout.frame.midX,
+                                    y: editorLayout.frame.midY
                                 )
                                 .focused($isTextFieldFocused)
-                                .onSubmit { _ = model.commitText() }
+                                .onSubmit { _ = model.commitActiveTextInput() }
                                 .onExitCommand { model.cancelTextEditing() }
                         }
                     }
-                    .clipShape(AnnotationCanvasViewportShape(rect: transform.visibleCanvasRect))
+                    .clipShape(AnnotationCanvasViewportShape(rect: viewport ?? transform.visibleCanvasRect))
 
-                    parameterControls
-                        .padding(8)
+                    if showsEditingControls, displaysParameterControls {
+                        let frame = parameterControlsFrame ?? AnnotationParameterControlsPlacement.resolveLocal(
+                            selection: viewport ?? transform.visibleCanvasRect, canvasSize: proxy.size)
+                        AnnotationParameterControls(model: model)
+                            .position(x: frame.midX, y: frame.midY)
+                    }
                 }
                 .onChange(of: model.textEditorOrigin) { _, origin in
                     isTextFieldFocused = origin != nil
@@ -536,6 +603,12 @@ struct AnnotationCanvas: View {
                 .onDeleteCommand { _ = model.deleteSelection() }
             }
         }
+    }
+
+    func showsParameterControls(_ visible: Bool) -> Self {
+        var copy = self
+        copy.displaysParameterControls = visible
+        return copy
     }
 
     private func canvasDrag(transform: AnnotationCanvasTransform) -> some Gesture {
@@ -570,76 +643,38 @@ struct AnnotationCanvas: View {
         )
     }
 
-    private var parameterControls: some View {
-        HStack(spacing: 8) {
-            Button {
-                model.selectForMoving()
-            } label: {
-                Image(systemName: "cursorarrow")
-                    .foregroundStyle(model.interactionMode == .selecting ? Color.accentColor : .primary)
-            }
-            .buttonStyle(.plain)
-            .help("Select and Move")
-
-            ColorPicker("Color", selection: colorBinding, supportsOpacity: true)
-                .labelsHidden()
-                .frame(width: 28)
-                .disabled(model.selectedTool == .mosaic)
-
-            if model.selectedTool.usesLineWidth {
-                Image(systemName: "lineweight")
-                Slider(value: lineWidthBinding, in: 1...32, step: 1)
-                    .frame(width: 90)
-            }
-
-            if model.selectedTool == .text || model.selectedTool == .step {
-                Stepper("\(Int(model.parameters.fontSize)) pt", value: fontSizeBinding, in: 10...72, step: 1)
-                    .frame(width: 108)
-            }
-
-            if model.selectedAnnotationID != nil {
-                Button(role: .destructive) {
-                    _ = model.deleteSelection()
-                } label: {
-                    Image(systemName: "trash")
+    private func mosaicOverlay(
+        image: NSImage,
+        transform: AnnotationCanvasTransform,
+        canvasSize: CGSize
+    ) -> some View {
+        let imageFrame = transform.sourceImageFrameInCanvas
+        return ZStack(alignment: .topLeading) {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.none)
+                .frame(width: imageFrame.width, height: imageFrame.height)
+                .position(x: imageFrame.midX, y: imageFrame.midY)
+        }
+        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
+        .mask {
+            Canvas { context, _ in
+                for item in model.renderItems {
+                    let annotation = transform.canvasAnnotation(item.annotation)
+                    guard case .mosaic(let points) = annotation.content else { continue }
+                    context.stroke(
+                        Path.polyline(points),
+                        with: .color(.white),
+                        style: StrokeStyle(
+                            lineWidth: annotation.parameters.lineWidth,
+                            lineCap: .square,
+                            lineJoin: .round
+                        )
+                    )
                 }
-                .buttonStyle(.plain)
-                .help("Delete Annotation")
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 36)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(radius: 4, y: 2)
-    }
-
-    private var colorBinding: Binding<Color> {
-        Binding(
-            get: { model.parameters.color.swiftUIColor },
-            set: { color in
-                guard let converted = NSColor(color).usingColorSpace(.deviceRGB) else { return }
-                model.parameters.color = AnnotationColor(
-                    red: converted.redComponent,
-                    green: converted.greenComponent,
-                    blue: converted.blueComponent,
-                    alpha: converted.alphaComponent
-                )
-            }
-        )
-    }
-
-    private var lineWidthBinding: Binding<Double> {
-        Binding(
-            get: { Double(model.parameters.lineWidth) },
-            set: { model.parameters.lineWidth = CGFloat($0) }
-        )
-    }
-
-    private var fontSizeBinding: Binding<Int> {
-        Binding(
-            get: { Int(model.parameters.fontSize) },
-            set: { model.parameters.fontSize = CGFloat($0) }
-        )
+        .allowsHitTesting(false)
     }
 
     private func selectionHandles(for rect: CGRect) -> some View {
@@ -729,6 +764,122 @@ struct AnnotationCanvas: View {
                 anchor: .center
             )
         }
+    }
+}
+
+struct AnnotationParameterControls: View {
+    static let preferredSize = CGSize(width: 220, height: 36)
+
+    @ObservedObject var model: AnnotationCanvasModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                model.selectForMoving()
+            } label: {
+                Image(systemName: "cursorarrow")
+                    .foregroundStyle(model.interactionMode == .selecting ? Color.accentColor : .primary)
+            }
+            .buttonStyle(.plain)
+            .help("Select and Move")
+
+            ColorPicker("Color", selection: colorBinding, supportsOpacity: true)
+                .labelsHidden()
+                .frame(width: 28)
+                .disabled(model.selectedTool == .mosaic)
+
+            if model.selectedTool.usesLineWidth {
+                Image(systemName: "lineweight")
+                Slider(value: lineWidthBinding, in: 1...32, step: 1)
+                    .frame(width: 90)
+            }
+
+            if model.selectedTool == .text || model.selectedTool == .step {
+                Stepper("\(Int(model.parameters.fontSize)) pt", value: fontSizeBinding, in: 10...72, step: 1)
+                    .frame(width: 108)
+            }
+
+            if model.selectedAnnotationID != nil {
+                Button(role: .destructive) {
+                    _ = model.deleteSelection()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .help("Delete Annotation")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(
+            width: Self.preferredSize.width,
+            height: Self.preferredSize.height,
+            alignment: .leading
+        )
+        .background(.regularMaterial, in: Capsule())
+        .shadow(radius: 4, y: 2)
+    }
+
+    private var colorBinding: Binding<Color> {
+        Binding(
+            get: { model.parameters.color.swiftUIColor },
+            set: { color in
+                guard let converted = NSColor(color).usingColorSpace(.deviceRGB) else { return }
+                model.parameters.color = AnnotationColor(
+                    red: converted.redComponent,
+                    green: converted.greenComponent,
+                    blue: converted.blueComponent,
+                    alpha: converted.alphaComponent
+                )
+            }
+        )
+    }
+
+    private var lineWidthBinding: Binding<Double> {
+        Binding(
+            get: { Double(model.parameters.lineWidth) },
+            set: { model.parameters.lineWidth = CGFloat($0) }
+        )
+    }
+
+    private var fontSizeBinding: Binding<Int> {
+        Binding(
+            get: { Int(model.parameters.fontSize) },
+            set: { model.parameters.fontSize = CGFloat($0) }
+        )
+    }
+}
+
+@MainActor
+private final class AnnotationCanvasMosaicImageCache: ObservableObject {
+    private var sourceIdentifier: ObjectIdentifier?
+    private var image: NSImage?
+
+    func image(for source: NSImage) -> NSImage? {
+        var proposedRect = CGRect(origin: .zero, size: source.size)
+        guard let sourceImage = source.cgImage(
+            forProposedRect: &proposedRect,
+            context: nil,
+            hints: nil
+        ) else { return nil }
+
+        let identifier = ObjectIdentifier(sourceImage)
+        if identifier == sourceIdentifier {
+            return image
+        }
+
+        let scale = source.size.width > 0
+            ? CGFloat(sourceImage.width) / source.size.width
+            : 1
+        let colorSpace = sourceImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        image = MosaicEffect.pixelatedImage(
+            sourceImage,
+            scale: scale,
+            colorSpace: colorSpace
+        ).map { pixelated in
+            NSImage(cgImage: pixelated, size: source.size)
+        }
+        sourceIdentifier = identifier
+        return image
     }
 }
 

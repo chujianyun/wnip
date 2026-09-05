@@ -5,19 +5,21 @@ struct WnipApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("Wnip", systemImage: "camera.viewfinder") {
-            Button("Capture Region") {
-                appDelegate.coordinator.startCapture(mode: .region)
-            }
-            Button("Capture Window") {
-                appDelegate.coordinator.startCapture(mode: .window)
-            }
-            Button("Capture Full Screen") {
-                appDelegate.coordinator.startCapture(mode: .fullScreen)
-            }
+        MenuBarExtra {
+            Button("Capture Region") { appDelegate.coordinator.startCapture(mode: .region) }
+            Button("Capture Window") { appDelegate.coordinator.startCapture(mode: .window) }
+            Button("Capture Full Screen") { appDelegate.coordinator.startCapture(mode: .fullScreen) }
             Divider()
             SettingsLink()
             Button("Quit") { NSApplication.shared.terminate(nil) }
+        } label: {
+            if let image = AppBranding.menuBarImage {
+                Image(nsImage: image)
+                    .accessibilityLabel("Wnip")
+            } else {
+                Image(systemName: "camera.viewfinder")
+                    .accessibilityLabel("Wnip")
+            }
         }
         Settings {
             SettingsView(coordinator: appDelegate.coordinator)

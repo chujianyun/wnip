@@ -15,6 +15,9 @@ struct SettingsAlertPresentation: Equatable {
         case .captureFailed:
             title = "Capture Failed"
             recoveryURL = nil
+        case .saveDirectoryNotRemembered:
+            title = "Screenshot Saved"
+            recoveryURL = nil
         case .shortcutFailed:
             title = "Shortcut Could Not Be Updated"
             recoveryURL = nil
@@ -60,9 +63,29 @@ struct SettingsView: View {
                     .frame(width: 120, height: 28)
                 }
             }
+            Section("Output") {
+                Picker("Format", selection: preferenceBinding(\.format)) {
+                    Text("PNG").tag(ScreenshotFormat.png)
+                    Text("JPEG").tag(ScreenshotFormat.jpeg)
+                }
+                TextField("Filename rule", text: preferenceBinding(\.filenameRule))
+                if coordinator.appPreferences.format == .jpeg {
+                    Slider(value: preferenceBinding(\.jpegQuality), in: 0.1...1) { Text("JPEG quality") }
+                }
+                Toggle("Region shadow", isOn: preferenceBinding(\.regionShadow))
+                Toggle("Window shadow", isOn: preferenceBinding(\.windowShadow))
+                Button("Choose a different save folder next time") {
+                    coordinator.updatePreference(\.saveDirectoryBookmark, to: nil)
+                }
+            }
+            Section("Completion feedback") {
+                Toggle("Show notification", isOn: preferenceBinding(\.completionNotificationEnabled))
+                Toggle("Play sound", isOn: preferenceBinding(\.completionSoundEnabled))
+                Toggle("Haptic feedback", isOn: preferenceBinding(\.hapticFeedbackEnabled))
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 190)
+        .frame(width: 480, height: 540)
         .alert(
             alert?.title ?? "Wnip",
             isPresented: Binding(
@@ -84,6 +107,11 @@ struct SettingsView: View {
         } message: {
             Text(alert?.message ?? "Unknown error")
         }
+    }
+
+    private func preferenceBinding<Value>(_ keyPath: WritableKeyPath<AppPreferences, Value>) -> Binding<Value> {
+        Binding(get: { coordinator.appPreferences[keyPath: keyPath] },
+                set: { coordinator.updatePreference(keyPath, to: $0) })
     }
 
     private func recordingChanged(_ isRecording: Bool) {

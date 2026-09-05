@@ -65,7 +65,7 @@ enum OverlayInteractionGeometry {
         if let handle = resizeHandle(at: point, selection: selection) {
             return .resize(handle)
         }
-        return .newSelection
+        return showsToolbar ? nil : .newSelection
     }
 
     static func updatedSelection(
