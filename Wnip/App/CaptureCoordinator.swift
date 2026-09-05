@@ -31,9 +31,11 @@ final class CaptureCoordinator: ObservableObject {
     private let regionHotKey: any HotKeyRegistering
     private let windowHotKey: any HotKeyRegistering
     private let preferences: any PreferencesStoring
+    private let clipboard: ImageClipboard
     private var captureTask: Task<Void, Never>?
     private var requestID = 0
     private var isRecordingShortcut = false
+    private var isCopying = false
 
     init() {
         permission = PermissionService()
@@ -42,6 +44,7 @@ final class CaptureCoordinator: ObservableObject {
         regionHotKey = HotKeyService()
         windowHotKey = HotKeyService()
         preferences = PreferencesStore()
+        clipboard = ImageClipboard()
     }
 
     init(
@@ -50,7 +53,8 @@ final class CaptureCoordinator: ObservableObject {
         overlay: any OverlayControlling,
         regionHotKey: any HotKeyRegistering,
         windowHotKey: any HotKeyRegistering,
-        preferences: any PreferencesStoring
+        preferences: any PreferencesStoring,
+        clipboard: ImageClipboard? = nil
     ) {
         self.permission = permission
         self.screen = screen
@@ -58,6 +62,7 @@ final class CaptureCoordinator: ObservableObject {
         self.regionHotKey = regionHotKey
         self.windowHotKey = windowHotKey
         self.preferences = preferences
+        self.clipboard = clipboard ?? ImageClipboard()
     }
 
     func start() {
@@ -76,6 +81,7 @@ final class CaptureCoordinator: ObservableObject {
         requestID &+= 1
         let currentID = requestID
         captureTask?.cancel()
+        isCopying = false
         overlay.dismissAll()
 
         captureTask = Task { [weak self] in
@@ -96,7 +102,9 @@ final class CaptureCoordinator: ObservableObject {
                         displays: content.displays,
                         windows: content.windows
                     ),
-                    callbacks: OverlayCallbacks(onCancel: { [weak self] in
+                    callbacks: OverlayCallbacks(onCopy: { [weak self] selection in
+                        self?.copySelection(selection, requestID: currentID)
+                    }, onCancel: { [weak self] in
                         self?.cancelCapture()
                     })
                 )
@@ -171,7 +179,38 @@ final class CaptureCoordinator: ObservableObject {
         requestID &+= 1
         captureTask?.cancel()
         captureTask = nil
+        isCopying = false
         overlay.dismissAll()
+    }
+
+    private func copySelection(_ selection: OverlayPresentation, requestID currentID: Int) {
+        guard currentID == requestID, !isCopying, selection.showsToolbar,
+              !selection.selection.rect.isEmpty,
+              let display = selection.displays.first(where: { $0.id == selection.activeDisplayID }) else { return }
+        isCopying = true
+        captureTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if currentID == requestID { isCopying = false } }
+            guard !Task.isCancelled, currentID == requestID else { return }
+            do {
+                let image: PixelImage
+                if selection.mode == .window, let window = selection.selectedWindow,
+                   selection.selection.rect == window.frame {
+                    image = try await screen.captureWindow(window)
+                } else {
+                    let captured = try await screen.captureDisplay(display, excluding: [])
+                    image = try ScreenshotCrop.crop(captured, selection: selection.selection.rect, display: display)
+                }
+                guard !Task.isCancelled, currentID == requestID else { return }
+                try clipboard.write(image)
+                overlay.dismissAll()
+                presentedError = nil
+                NSApp.deactivate()
+            } catch {
+                guard !Task.isCancelled, currentID == requestID else { return }
+                presentedError = .captureFailed(error.localizedDescription)
+            }
+        }
     }
 
     func clearPresentedError() {

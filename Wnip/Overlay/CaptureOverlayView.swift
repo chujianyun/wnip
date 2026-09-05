@@ -262,6 +262,9 @@ struct CaptureOverlayView: View {
             return
         }
 
+        // Once committed, clicks outside the selection must not pick a new window.
+        guard !viewModel.presentation.showsToolbar else { return }
+
         switch viewModel.presentation.mode {
         case .region:
             break

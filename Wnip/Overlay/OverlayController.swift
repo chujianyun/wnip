@@ -4,6 +4,7 @@ import SwiftUI
 enum OverlayKeyboardAction: Equatable, Sendable {
     case cancel
     case undo
+    case copy
 }
 
 enum OverlayKeyboardShortcut {
@@ -16,6 +17,10 @@ enum OverlayKeyboardShortcut {
             return .cancel
         }
         let effectiveModifiers = modifiers.intersection(.deviceIndependentFlagsMask)
+        if (keyCode == 36 || keyCode == 76),
+           effectiveModifiers.intersection([.command, .control, .option, .shift]).isEmpty {
+            return .copy
+        }
         if effectiveModifiers == .command,
            charactersIgnoringModifiers?.lowercased() == "z" {
             return .undo
@@ -32,6 +37,7 @@ struct OverlayPresentation: Equatable, Sendable {
     var hoveredWindowID: UInt32?
     var activeDisplayID: UInt32?
     var showsToolbar: Bool
+    var selectedWindow: CaptureCandidateWindow?
 
     init(
         mode: CaptureMode,
@@ -53,6 +59,7 @@ struct OverlayPresentation: Equatable, Sendable {
 }
 
 struct OverlayCallbacks {
+    var onCopy: @MainActor (OverlayPresentation) -> Void = { _ in }
     var onCancel: @MainActor () -> Void = {}
     var onUndo: @MainActor () -> Void = {}
     var onSelectionChanged: @MainActor (UInt32, SelectionModel) -> Void = { _, _ in }
@@ -184,15 +191,19 @@ final class OverlayController: OverlayControlling {
                 self?.setSelection(selection, activeDisplayID: displayID)
             },
             onSelectionCommitted: { [weak self] displayID, selection in
+                self?.commitSelection(selection, activeDisplayID: displayID)
                 self?.callbacks.onSelectionCommitted(displayID, selection)
             },
             onWindowHovered: { [weak self] displayID, window in
                 self?.setHoveredWindow(window, activeDisplayID: displayID)
             },
             onWindowSelected: { [weak self] displayID, window in
+                self?.commitSelection(SelectionModel(rect: window.frame), activeDisplayID: displayID)
+                self?.presentation?.selectedWindow = window
                 self?.callbacks.onWindowSelected(displayID, window)
             },
             onDisplaySelected: { [weak self] display in
+                self?.commitSelection(SelectionModel(rect: display.frame), activeDisplayID: display.id)
                 self?.callbacks.onDisplaySelected(display)
             },
             onToolbarAction: { [weak self] action in
@@ -211,6 +222,19 @@ final class OverlayController: OverlayControlling {
         apply(presentation)
     }
 
+    private func commitSelection(_ selection: SelectionModel, activeDisplayID: UInt32) {
+        guard var presentation,
+              !selection.rect.isEmpty,
+              !selection.rect.isNull,
+              presentation.displays.contains(where: { $0.id == activeDisplayID }) else { return }
+        presentation.selection = selection
+        presentation.activeDisplayID = activeDisplayID
+        presentation.hoveredWindowID = nil
+        presentation.showsToolbar = true
+        apply(presentation)
+        makeActivePanelKey()
+    }
+
     private func setSelection(_ selection: SelectionModel, activeDisplayID: UInt32) {
         guard var presentation else { return }
         presentation.selection = selection
@@ -223,7 +247,7 @@ final class OverlayController: OverlayControlling {
         _ window: CaptureCandidateWindow?,
         activeDisplayID: UInt32
     ) {
-        guard var presentation else { return }
+        guard var presentation, !presentation.showsToolbar else { return }
         presentation.hoveredWindowID = window?.id
         presentation.activeDisplayID = activeDisplayID
         apply(presentation)
@@ -243,6 +267,10 @@ final class OverlayController: OverlayControlling {
             callbacks.onCancel()
         case .undo:
             callbacks.onUndo()
+        case .copy:
+            guard let presentation, presentation.showsToolbar,
+                  !presentation.selection.rect.isEmpty else { return }
+            callbacks.onCopy(presentation)
         default:
             callbacks.onToolbarAction(action)
         }
@@ -262,6 +290,13 @@ final class OverlayController: OverlayControlling {
                 return nil
             case .undo:
                 self.callbacks.onUndo()
+                return nil
+            case .copy:
+                // Let text editors consume Return while entering an annotation.
+                if self.windows.values.contains(where: { $0.firstResponder is NSTextView }) {
+                    return event
+                }
+                self.routeToolbarAction(.copy)
                 return nil
             case nil:
                 return event
