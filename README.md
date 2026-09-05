@@ -2,6 +2,8 @@
 
 Wnip 是一款使用 Swift、SwiftUI、AppKit 和 ScreenCaptureKit 构建的 macOS 菜单栏截图工具，支持截图、标注、复制、保存和贴图。
 
+作者：**悟鸣** · [作者介绍与二维码](#作者)
+
 ## 功能
 
 - **截图**：区域截图、窗口截图、全屏截图，支持多显示器与 Retina 屏幕。
@@ -89,3 +91,20 @@ bash scripts/package-release.sh 0.1.0
 | `Wnip/System` | 系统权限、快捷键与反馈 |
 | `WnipTests` | 自动化测试 |
 | `docs` | 设计、实现计划与功能说明 |
+
+## 作者
+
+**悟鸣**，浙江省人工智能专家服务团专家、前蚂蚁集团高级 Agent 工程师、集团年度最受欢迎讲师、Qoder 大使、千问办公大使。
+
+欢迎扫码交流，或关注公众号，了解 AI 与 Agent 实践。
+
+<table>
+  <tr>
+    <th>悟鸣AI</th>
+    <th>公众号</th>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><img src="docs/images/wuming-ai-qr.png" alt="悟鸣AI二维码" width="280" /></td>
+    <td align="center" valign="top"><img src="docs/images/official-account-qr.jpg" alt="悟鸣公众号二维码" width="280" /></td>
+  </tr>
+</table>
