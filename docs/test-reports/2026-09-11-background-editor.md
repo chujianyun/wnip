@@ -87,3 +87,16 @@ xcodebuild build -quiet -project Wnip.xcodeproj -scheme Wnip \
 | --- | --- |
 | Wnip-0.2.0-macOS-arm64.dmg | b6f51983c99f7a1ed838e138266ded7c803ee9b1b4e5dfa545ccd2f1b2c404ce |
 | Wnip-0.2.0-macOS-x86_64.dmg | 9c383891dd37ceb0be67ee5784f90a6272bad11cc886771201a8f78aa23fca3f |
+
+
+## 发布完成记录（2026-09-12）
+
+- 功能提交 `7b3a1b639ccbf3e9226ebaa4fb2e2f45e9abeca4` 已快进合并 main 并普通推送到 origin/main；v0.2.0 注释标签解析到同一提交。
+- [GitHub Release v0.2.0](https://github.com/chujianyun/wnip/releases/tag/v0.2.0) 已正式发布并设为 Latest，非草稿、非预发布。
+- 三份远端附件与本地文件的大小、SHA-256 均一致。远端校验使用 GitHub Releases API 的 asset digest，发布任务在校验通过后才解除草稿状态。
+- [发布任务](https://github.com/chujianyun/wnip/actions/runs/34620548413) 成功。因本机 gh 未登录、浏览器附件接口受限，改用已有 SSH 权限推送独立发布分支，由 Actions 内置任务令牌上传。未新增或存储用户访问令牌，发布分支未合并 main。
+- 本机已停止 PID 5074，确认无 Wnip 残留后安装本次 0.2.0 arm64 产物；启动 PID 6615，实际路径 `/Applications/Wnip.app/Contents/MacOS/Wnip`，Info.plist 版本为 0.2.0。安装后的可执行文件与打包产物逐字节一致，签名复查通过。
+- 原工作区预先存在的暂存及未提交改动均保留，暂存补丁逐字节匹配合并前备份。原有预览功能与新背景入口的冲突已在未提交工作区中合并保留，未混入发布提交。
+- 额外对恢复后的本地工作区（含原有未提交修改）执行完整测试：189 通过、0 失败、0 跳过。该结果用于确认保留原有修改后的工作区可用；v0.2.0 发布源码的测试结果仍为 185 项全部通过。
+- 本轮最后的报告补充仅修改文档，不改变发布标签、应用源码或安装包。
+- UI 实际交互、屏幕录制权限实测与 Intel 真机运行仍未验证，Release 说明中已明确列出。
