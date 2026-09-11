@@ -1,0 +1,2 @@
+b6f51983c99f7a1ed838e138266ded7c803ee9b1b4e5dfa545ccd2f1b2c404ce  Wnip-0.2.0-macOS-arm64.dmg
+9c383891dd37ceb0be67ee5784f90a6272bad11cc886771201a8f78aa23fca3f  Wnip-0.2.0-macOS-x86_64.dmg

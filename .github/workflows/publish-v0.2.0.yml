@@ -1,0 +1,29 @@
+name: Publish verified Wnip v0.2.0 artifacts
+on:
+  push:
+    branches: [codex/release-assets-v0.2.0]
+    paths: [release-payload/**, .github/workflows/publish-v0.2.0.yml]
+permissions:
+  contents: write
+concurrency:
+  group: publish-wnip-v0.2.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact uploaded payload
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          git init payload
+          cd payload
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch --depth=1 origin "$EXPECTED_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Verify assets and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 payload/release-payload/publish.py
