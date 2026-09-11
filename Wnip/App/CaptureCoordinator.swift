@@ -36,6 +36,7 @@ final class CaptureCoordinator: ObservableObject {
     private let regionHotKey: any HotKeyRegistering
     private let windowHotKey: any HotKeyRegistering
     private let pinHotKey: any HotKeyRegistering
+    private let backgroundEditor: any BackgroundEditorPresenting
     private let pinnedImages: any PinnedImagePresenting
     private var latestScreenshot: (image: PixelImage, frame: CGRect)?
     private var isCapturing = false
@@ -55,6 +56,7 @@ final class CaptureCoordinator: ObservableObject {
         regionHotKey = HotKeyService()
         windowHotKey = HotKeyService()
         pinHotKey = HotKeyService()
+        backgroundEditor = BackgroundEditorController()
         pinnedImages = PinnedImageController()
         preferences = PreferencesStore()
         clipboard = ImageClipboard()
@@ -73,7 +75,8 @@ final class CaptureCoordinator: ObservableObject {
         output: (any OutputServing)? = nil,
         feedback: (any CompletionFeedbackServing)? = nil,
         pinHotKey: (any HotKeyRegistering)? = nil,
-        pinnedImages: (any PinnedImagePresenting)? = nil
+        pinnedImages: (any PinnedImagePresenting)? = nil,
+        backgroundEditor: (any BackgroundEditorPresenting)? = nil
     ) {
         self.permission = permission
         self.screen = screen
@@ -81,6 +84,7 @@ final class CaptureCoordinator: ObservableObject {
         self.regionHotKey = regionHotKey
         self.windowHotKey = windowHotKey
         self.pinHotKey = pinHotKey ?? HotKeyService()
+        self.backgroundEditor = backgroundEditor ?? BackgroundEditorController()
         self.pinnedImages = pinnedImages ?? PinnedImageController()
         self.preferences = preferences
         self.clipboard = clipboard ?? ImageClipboard()
@@ -101,7 +105,7 @@ final class CaptureCoordinator: ObservableObject {
         registerCurrentShortcuts()
     }
 
-    func startCapture(mode: CaptureMode) {
+    func startCapture(mode: CaptureMode, addingBackground: Bool = false) {
         requestID &+= 1
         let currentID = requestID
         captureTask?.cancel()
@@ -124,6 +128,7 @@ final class CaptureCoordinator: ObservableObject {
                 let content = try await screen.availableContent()
                 guard !Task.isCancelled, currentID == requestID else { return }
                 var presentation = OverlayPresentation(mode: mode, displays: content.displays, windows: content.windows)
+                presentation.addingBackground = addingBackground
                 // Freeze the same source used by both live annotations and export,
                 // before creating any screenshot overlay windows.
                 for display in content.displays {
@@ -263,9 +268,18 @@ final class CaptureCoordinator: ObservableObject {
                     forGlobalRect: selection.selection.rect, in: display.frame)
                 let rendered = try ScreenshotImageRenderer().render(
                     source: source, crop: crop, annotations: selection.annotations,
-                    shadow: CaptureShadowPolicy.shouldApply(mode: selection.mode,
+                    shadow: !selection.addingBackground && CaptureShadowPolicy.shouldApply(mode: selection.mode,
                         regionEnabled: appPreferences.regionShadow, windowEnabled: appPreferences.windowShadow))
                 guard !Task.isCancelled, currentID == requestID else { return }
+                if selection.addingBackground {
+                    isCapturing = false
+                    overlay.dismissAll()
+                    backgroundEditor.present(source: rendered) { [weak self] composed, save in
+                        guard let self else { throw BackgroundFailure.renderFailed }
+                        return try self.exportBackground(composed, scale: source.scale, frame: selection.selection.rect, save: save)
+                    }
+                    return
+                }
                 var bookmarkWarning: String?
                 let image = PixelImage(image: rendered, scale: source.scale, colorSpace: source.colorSpace)
                 if pin {
@@ -296,6 +310,27 @@ final class CaptureCoordinator: ObservableObject {
                 presentedError = .captureFailed(error.localizedDescription)
             }
         }
+    }
+
+    private func exportBackground(_ image: CGImage, scale: CGFloat, frame: CGRect, save: Bool) throws -> String {
+        var message = "已复制图片"
+        if save {
+            let result = try output.save(image, preferences: appPreferences)
+            message = "已保存：\(result.url.lastPathComponent)"
+            if result.shouldRememberDirectory {
+                do {
+                    try preferences.replaceSaveDirectoryBookmark(for: result.url.deletingLastPathComponent())
+                    appPreferences = try preferences.load()
+                } catch {
+                    message += "（保存成功，但无法记住目录）"
+                }
+            }
+        } else {
+            try clipboard.write(PixelImage(image: image, scale: scale))
+        }
+        latestScreenshot = (PixelImage(image: image, scale: scale), frame)
+        feedback.perform(save ? .saved : .copied, preferences: appPreferences)
+        return message
     }
 
     func updatePreference<Value>(_ keyPath: WritableKeyPath<AppPreferences, Value>, to value: Value) {

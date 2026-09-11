@@ -63,7 +63,7 @@ struct CaptureOverlayView: View {
                 }
 
                 if showsToolbar, let toolbarRect {
-                    AnnotationToolbar(model: viewModel.annotationModel, onAction: onToolbarAction)
+                    AnnotationToolbar(model: viewModel.annotationModel, addingBackground: viewModel.presentation.addingBackground, onAction: onToolbarAction)
                         .zIndex(2)
                         .frame(width: toolbarRect.width, height: toolbarRect.height)
                         .position(x: toolbarRect.midX, y: toolbarRect.midY)

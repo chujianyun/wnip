@@ -9,6 +9,11 @@ struct WnipApp: App {
             Button("Capture Region") { appDelegate.coordinator.startCapture(mode: .region) }
             Button("Capture Window") { appDelegate.coordinator.startCapture(mode: .window) }
             Button("Capture Full Screen") { appDelegate.coordinator.startCapture(mode: .fullScreen) }
+            Menu("截图加背景") {
+                Button("区域截图加背景") { appDelegate.coordinator.startCapture(mode: .region, addingBackground: true) }
+                Button("窗口截图加背景") { appDelegate.coordinator.startCapture(mode: .window, addingBackground: true) }
+                Button("全屏截图加背景") { appDelegate.coordinator.startCapture(mode: .fullScreen, addingBackground: true) }
+            }
             Button("Pin Screenshot (⌘⇧P)") { appDelegate.coordinator.pinScreenshot() }
             Divider()
             SettingsLink()

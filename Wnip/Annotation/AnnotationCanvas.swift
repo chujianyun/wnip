@@ -289,7 +289,7 @@ final class AnnotationCanvasModel: ObservableObject {
         case .text: tool = .text
         case .highlight: tool = .highlight
         case .step: tool = .step
-        case .undo, .cancel, .copy, .save, .pin: return false
+        case .undo, .cancel, .copy, .save, .pin, .background: return false
         }
         selectTool(tool)
         return true

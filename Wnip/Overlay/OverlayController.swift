@@ -42,6 +42,7 @@ struct OverlayPresentation: Equatable, Sendable {
     var activeDisplayID: UInt32?
     var showsToolbar: Bool
     var selectedWindow: CaptureCandidateWindow?
+    var addingBackground = false
     var annotations: [Annotation] = []
     var sourceImages: [UInt32: PixelImage] = [:]
 
@@ -286,12 +287,13 @@ final class OverlayController: OverlayControlling {
                 _ = viewModel?.annotationModel.undo()
             }
             callbacks.onUndo()
-        case .copy, .save, .pin:
+        case .copy, .save, .pin, .background:
             guard var presentation, presentation.showsToolbar,
                   !presentation.selection.rect.isEmpty else { return }
             _ = viewModel?.annotationModel.commitActiveTextInput()
             presentation.annotations = viewModel?.annotationModel.document.annotations ?? []
-            if action == .copy { callbacks.onCopy(presentation) }
+            if action == .background { presentation.addingBackground = true; callbacks.onCopy(presentation) }
+            else if action == .copy { callbacks.onCopy(presentation) }
             else if action == .save { callbacks.onSave(presentation) }
             else { callbacks.onPin(presentation) }
         default:

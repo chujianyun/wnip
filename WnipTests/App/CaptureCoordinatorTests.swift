@@ -525,6 +525,43 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertTrue(pins.images.isEmpty)
     }
 
+    func testBackgroundCaptureRoutesAllModesWithoutPrematureClipboardWriteOrShadow() async throws {
+        for mode in [CaptureMode.region, .window, .fullScreen] {
+            let overlay = OverlayFake(), editor = BackgroundEditorFake()
+            let board = NSPasteboard.withUniqueName()
+            defer { board.releaseGlobally() }
+            board.setString("unchanged", forType: .string)
+            let coordinator = makeCoordinator(permissionGranted: true, overlay: overlay,
+                clipboard: ImageClipboard(pasteboard: board), backgroundEditor: editor)
+            coordinator.startCapture(mode: mode, addingBackground: true)
+            await coordinator.waitForPendingCaptureForTesting()
+            var selection = try XCTUnwrap(overlay.presentations.first)
+            XCTAssertTrue(selection.addingBackground)
+            selection.showsToolbar = true; selection.activeDisplayID = 1
+            selection.selection = SelectionModel(rect: CGRect(x: 10, y: 10, width: 50, height: 40))
+            overlay.callbacks[0].onCopy(selection)
+            await coordinator.waitForPendingCaptureForTesting()
+            let image = try XCTUnwrap(editor.source)
+            XCTAssertEqual(image.width, 50); XCTAssertEqual(image.height, 40)
+            XCTAssertEqual(board.string(forType: .string), "unchanged")
+            XCTAssertEqual(overlay.dismissAllCallCount, 2)
+            _ = try editor.onExport?(image, false)
+            XCTAssertNotNil(board.data(forType: .png))
+        }
+    }
+
+    func testCancelledBackgroundCaptureDoesNotOpenEditorOrAffectNextCapture() async throws {
+        let overlay = OverlayFake(), editor = BackgroundEditorFake()
+        let coordinator = makeCoordinator(permissionGranted: true, overlay: overlay, backgroundEditor: editor)
+        coordinator.startCapture(mode: .region, addingBackground: true)
+        await coordinator.waitForPendingCaptureForTesting()
+        coordinator.cancelCapture()
+        XCTAssertNil(editor.source)
+        coordinator.startCapture(mode: .region)
+        await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertFalse(try XCTUnwrap(overlay.presentations.last).addingBackground)
+    }
+
     private func makeCoordinator(
         permissionGranted: Bool = false,
         permission: PermissionFake? = nil,
@@ -536,7 +573,8 @@ final class CaptureCoordinatorTests: XCTestCase {
         clipboard: ImageClipboard? = nil,
         output: (any OutputServing)? = nil,
         pinHotKey: HotKeyFake? = nil,
-        pinnedImages: PinnedImagesFake? = nil
+        pinnedImages: PinnedImagesFake? = nil,
+        backgroundEditor: BackgroundEditorFake? = nil
     ) -> CaptureCoordinator {
         CaptureCoordinator(
             permission: permission ?? PermissionFake(
@@ -549,7 +587,8 @@ final class CaptureCoordinatorTests: XCTestCase {
             windowHotKey: windowHotKey ?? HotKeyFake(),
             preferences: preferences ?? PreferencesFake(),
             clipboard: clipboard, output: output,
-            pinHotKey: pinHotKey ?? HotKeyFake(), pinnedImages: pinnedImages ?? PinnedImagesFake()
+            pinHotKey: pinHotKey ?? HotKeyFake(), pinnedImages: pinnedImages ?? PinnedImagesFake(),
+            backgroundEditor: backgroundEditor
         )
     }
 }
@@ -753,5 +792,14 @@ private final class PinnedImagesFake: PinnedImagePresenting {
     func present(_ image: PixelImage, near selection: CGRect) {
         images.append(image)
         frames.append(selection)
+    }
+}
+
+@MainActor
+private final class BackgroundEditorFake: BackgroundEditorPresenting {
+    var source: CGImage?
+    var onExport: BackgroundExport?
+    func present(source: CGImage, onExport: @escaping BackgroundExport) {
+        self.source = source; self.onExport = onExport
     }
 }

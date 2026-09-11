@@ -15,15 +15,18 @@ enum OverlayToolbarAction: String, CaseIterable, Equatable, Sendable {
     case copy
     case save
     case pin
+    case background
 }
 
 struct AnnotationToolbar: View {
-    static let preferredSize = CGSize(width: 521, height: 50)
+    static let preferredSize = CGSize(width: 556, height: 50)
 
     @ObservedObject var model: AnnotationCanvasModel
+    let addingBackground: Bool
     let onAction: (OverlayToolbarAction) -> Void
 
-    init(model: AnnotationCanvasModel? = nil, onAction: @escaping (OverlayToolbarAction) -> Void) {
+    init(model: AnnotationCanvasModel? = nil, addingBackground: Bool = false, onAction: @escaping (OverlayToolbarAction) -> Void) {
+        self.addingBackground = addingBackground
         self.model = model ?? AnnotationCanvasModel()
         self.onAction = onAction
     }
@@ -44,9 +47,17 @@ struct AnnotationToolbar: View {
 
             toolButton(.undo, systemImage: "arrow.uturn.backward")
             toolButton(.cancel, systemImage: "xmark", tint: .red)
-            toolButton(.pin, systemImage: "pin")
-            toolButton(.copy, systemImage: "doc.on.doc")
-            toolButton(.save, systemImage: "square.and.arrow.down")
+            if addingBackground {
+                Button("添加背景 →") { onAction(.copy) }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityLabel("下一步：添加背景")
+                    .help("下一步：添加背景（Return）")
+            } else {
+                toolButton(.background, systemImage: "photo.badge.plus")
+                toolButton(.pin, systemImage: "pin")
+                toolButton(.copy, systemImage: "doc.on.doc")
+                toolButton(.save, systemImage: "square.and.arrow.down")
+            }
         }
         .padding(.horizontal, 9)
         .frame(width: Self.preferredSize.width, height: Self.preferredSize.height)
@@ -93,7 +104,7 @@ private extension OverlayToolbarAction {
         case .text: .text
         case .highlight: .highlight
         case .step: .step
-        case .undo, .cancel, .copy, .save, .pin: nil
+        case .undo, .cancel, .copy, .save, .pin, .background: nil
         }
     }
 
@@ -112,6 +123,7 @@ private extension OverlayToolbarAction {
         case .cancel: "Cancel"
         case .copy: "Copy"
         case .save: "Save"
+        case .background: "添加背景"
         case .pin: "Pin Screenshot (⌘⇧P)"
         }
     }
