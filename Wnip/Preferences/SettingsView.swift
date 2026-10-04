@@ -18,6 +18,9 @@ struct SettingsAlertPresentation: Equatable {
         case .saveDirectoryNotRemembered:
             title = "Screenshot Saved"
             recoveryURL = nil
+        case .saveDirectoryUpdateFailed:
+            title = "Save Folder Could Not Be Updated"
+            recoveryURL = nil
         case .shortcutFailed:
             title = "Shortcut Could Not Be Updated"
             recoveryURL = nil
@@ -75,8 +78,28 @@ struct SettingsView: View {
                 }
                 Toggle("Region shadow", isOn: preferenceBinding(\.regionShadow))
                 Toggle("Window shadow", isOn: preferenceBinding(\.windowShadow))
-                Button("Choose a different save folder next time") {
-                    coordinator.updatePreference(\.saveDirectoryBookmark, to: nil)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Save folder")
+                        Spacer()
+                        Button("Choose…", action: chooseSaveDirectory)
+                    }
+                    Text(coordinator.appPreferences.saveDirectoryURL?.path ?? "Choose when saving for the first time")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                        .help(coordinator.appPreferences.saveDirectoryURL?.path ?? "")
+                    if coordinator.appPreferences.saveDirectoryURL != nil {
+                        Text("Missing folders will be created automatically when saving.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Choose a different save folder next time") {
+                            coordinator.clearSaveDirectory()
+                        }
+                        .font(.caption)
+                    }
                 }
             }
             Section("Completion feedback") {
@@ -108,6 +131,19 @@ struct SettingsView: View {
         } message: {
             Text(alert?.message ?? "Unknown error")
         }
+    }
+
+    private func chooseSaveDirectory() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Save Folder"
+        panel.prompt = "Choose"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = coordinator.appPreferences.saveDirectoryURL
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        coordinator.setSaveDirectory(directory)
     }
 
     private func preferenceBinding<Value>(_ keyPath: WritableKeyPath<AppPreferences, Value>) -> Binding<Value> {

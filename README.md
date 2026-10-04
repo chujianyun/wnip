@@ -40,7 +40,7 @@ Wnip 常驻菜单栏，不显示 Dock 图标。点击菜单栏图标可截图或
 | 贴图 | `⌘⇧P` |
 | 取消截图 / 关闭选中的贴图 | `Esc` |
 
-选区确定后，可使用浮动工具栏标注、保存、复制或贴图。区域和窗口快捷键可在 Settings 中修改，贴图快捷键固定。更多贴图行为见 [贴图说明](docs/features/pinned-screenshots.md)。
+选区确定后，可使用浮动工具栏标注、保存、复制或贴图。Settings → Output → Save folder 可查看当前保存路径并通过 Choose… 选择文件夹；保存时会自动重建被删除的目录（含缺失的父目录），无法创建或写入时会弹出另存为窗口。区域和窗口快捷键可在 Settings 中修改，贴图快捷键固定。更多贴图行为见 [贴图说明](docs/features/pinned-screenshots.md)。
 
 ## 开发与测试
 

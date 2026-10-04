@@ -164,9 +164,8 @@ final class OutputService: OutputServing {
         }
     }
 
-    /// Writes into the remembered directory when it is still reachable and
-    /// writable, and otherwise falls back to the save panel so the composed
-    /// image is never lost.
+    /// Recreates missing directories before saving. If creation or writing fails,
+    /// keep the composed image available through the save panel.
     func save(_ image: CGImage, preferences: AppPreferences) throws -> ScreenshotSaveResult {
         let format = preferences.format
         let data = try encoder.encode(
@@ -183,9 +182,9 @@ final class OutputService: OutputServing {
         if let saved = saveToBookmarkedDirectory(
             data: data,
             filename: filename,
-            bookmark: preferences.saveDirectoryBookmark
+            preferences: preferences
         ) {
-            return ScreenshotSaveResult(url: saved, shouldRememberDirectory: false)
+            return saved
         }
 
         guard let destination = savePanel.chooseDestination(
@@ -204,16 +203,9 @@ final class OutputService: OutputServing {
     private func saveToBookmarkedDirectory(
         data: Data,
         filename: String,
-        bookmark: Data?
-    ) -> URL? {
-        guard let bookmark, !bookmark.isEmpty else { return nil }
-        var isStale = false
-        guard let directory = try? URL(
-            resolvingBookmarkData: bookmark,
-            options: [.withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ) else { return nil }
+        preferences: AppPreferences
+    ) -> ScreenshotSaveResult? {
+        guard let directory = preferences.saveDirectoryURL else { return nil }
 
         let isAccessing = directory.startAccessingSecurityScopedResource()
         defer {
@@ -221,11 +213,19 @@ final class OutputService: OutputServing {
                 directory.stopAccessingSecurityScopedResource()
             }
         }
-        guard fileManager.fileExists(atPath: directory.path),
-              fileManager.isWritableFile(atPath: directory.path) else { return nil }
-
-        let destination = resolver.availableURL(in: directory, filename: filename)
-        guard (try? data.write(to: destination, options: .atomic)) != nil else { return nil }
-        return destination
+        let existed = fileManager.fileExists(atPath: directory.path)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let destination = resolver.availableURL(in: directory, filename: filename)
+            try data.write(to: destination, options: .atomic)
+            // A recreated folder needs a new bookmark and older preferences
+            // need a persisted path for subsequent saves after deletion.
+            return ScreenshotSaveResult(
+                url: destination,
+                shouldRememberDirectory: !existed || preferences.saveDirectoryPath != directory.standardizedFileURL.path
+            )
+        } catch {
+            return nil
+        }
     }
 }

@@ -7,6 +7,7 @@ enum CaptureCoordinatorError: LocalizedError, Equatable {
     case captureFailed(String)
     case shortcutFailed(String)
     case saveDirectoryNotRemembered(String)
+    case saveDirectoryUpdateFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -14,7 +15,7 @@ enum CaptureCoordinatorError: LocalizedError, Equatable {
             return "Screen Recording permission is required."
         case .captureFailed(let message):
             return message
-        case .saveDirectoryNotRemembered(let message):
+        case .saveDirectoryNotRemembered(let message), .saveDirectoryUpdateFailed(let message):
             return message
         case .shortcutFailed(let message):
             return message
@@ -384,6 +385,27 @@ final class CaptureCoordinator: ObservableObject {
             appPreferences = replacement
         } catch {
             presentedError = .captureFailed(error.localizedDescription)
+        }
+    }
+
+    func setSaveDirectory(_ directory: URL) {
+        do {
+            try preferences.replaceSaveDirectoryBookmark(for: directory)
+            appPreferences = try preferences.load()
+        } catch {
+            presentedError = .saveDirectoryUpdateFailed(error.localizedDescription)
+        }
+    }
+
+    func clearSaveDirectory() {
+        do {
+            var replacement = try preferences.load()
+            replacement.saveDirectoryBookmark = nil
+            replacement.saveDirectoryPath = nil
+            try preferences.save(replacement)
+            appPreferences = replacement
+        } catch {
+            presentedError = .saveDirectoryUpdateFailed(error.localizedDescription)
         }
     }
 

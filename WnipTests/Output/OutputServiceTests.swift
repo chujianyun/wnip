@@ -97,12 +97,95 @@ final class OutputServiceTests: XCTestCase {
 
         let saved = try service.save(
             solidImage().image,
-            preferences: AppPreferences(saveDirectoryBookmark: bookmark)
+            preferences: AppPreferences(saveDirectoryBookmark: bookmark, saveDirectoryPath: directory.path)
         )
 
         XCTAssertEqual(saved.url.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL)
         XCTAssertFalse(saved.shouldRememberDirectory)
         XCTAssertEqual(panel.callCount, 0)
+    }
+
+    func testDeletedNestedSaveDirectoryIsRecreatedAfterPreferencesReload() throws {
+        let root = try temporaryDirectory()
+        let directory = root.appendingPathComponent("parent/screenshots", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let bookmark = try directory.bookmarkData(options: [.withSecurityScope],
+                                                  includingResourceValuesForKeys: nil, relativeTo: nil)
+        let original = AppPreferences(saveDirectoryBookmark: bookmark, saveDirectoryPath: directory.path)
+        let preferences = try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(original))
+        try FileManager.default.removeItem(at: directory.deletingLastPathComponent())
+        let panel = RecordingSavePanel(destination: nil)
+
+        let saved = try OutputService(savePanel: panel).save(solidImage().image, preferences: preferences)
+
+        XCTAssertEqual(saved.url.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL)
+        XCTAssertNotNil(CGImageSourceCreateWithURL(saved.url as CFURL, nil))
+        XCTAssertTrue(saved.shouldRememberDirectory)
+        XCTAssertEqual(panel.callCount, 0)
+    }
+
+    func testLegacyBookmarkRecreatesDeletedDirectoryWithoutStoredPath() throws {
+        let directory = try temporaryDirectory().appendingPathComponent("legacy", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let bookmark = try directory.bookmarkData(options: [.withSecurityScope],
+                                                  includingResourceValuesForKeys: nil, relativeTo: nil)
+        try FileManager.default.removeItem(at: directory)
+        let panel = RecordingSavePanel(destination: nil)
+
+        let saved = try OutputService(savePanel: panel).save(
+            solidImage().image, preferences: AppPreferences(saveDirectoryBookmark: bookmark))
+
+        XCTAssertEqual(saved.url.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saved.url.path))
+        XCTAssertEqual(panel.callCount, 0)
+    }
+
+    func testMovedDirectoryDoesNotRedirectSavingAwayFromConfiguredPath() throws {
+        let root = try temporaryDirectory()
+        let directory = root.appendingPathComponent("screenshots", isDirectory: true)
+        let moved = root.appendingPathComponent("moved-away", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let bookmark = try directory.bookmarkData(options: [.withSecurityScope],
+                                                  includingResourceValuesForKeys: nil, relativeTo: nil)
+        try FileManager.default.moveItem(at: directory, to: moved)
+        let panel = RecordingSavePanel(destination: nil)
+
+        let saved = try OutputService(savePanel: panel).save(solidImage().image,
+            preferences: AppPreferences(saveDirectoryBookmark: bookmark, saveDirectoryPath: directory.path))
+
+        XCTAssertEqual(saved.url.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saved.url.path))
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: moved.path).isEmpty)
+        XCTAssertEqual(panel.callCount, 0)
+    }
+
+    func testInvalidBookmarkUsesStoredPathAndCreatesMissingDirectory() throws {
+        let directory = try temporaryDirectory().appendingPathComponent("new", isDirectory: true)
+        let panel = RecordingSavePanel(destination: nil)
+        let preferences = AppPreferences(saveDirectoryBookmark: Data([0, 1]), saveDirectoryPath: directory.path)
+
+        let saved = try OutputService(savePanel: panel).save(solidImage().image, preferences: preferences)
+
+        XCTAssertEqual(saved.url.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saved.url.path))
+        XCTAssertEqual(panel.callCount, 0)
+    }
+
+    func testFileBlockingDirectoryCreationFallsBackWithoutOverwritingIt() throws {
+        let root = try temporaryDirectory()
+        let blocked = root.appendingPathComponent("blocked")
+        let contents = Data("keep this file".utf8)
+        try contents.write(to: blocked)
+        let destination = root.appendingPathComponent("fallback.png")
+        let panel = RecordingSavePanel(destination: destination)
+
+        let saved = try OutputService(savePanel: panel).save(solidImage().image,
+            preferences: AppPreferences(saveDirectoryPath: blocked.appendingPathComponent("shots").path))
+
+        XCTAssertEqual(saved.url, destination)
+        XCTAssertEqual(try Data(contentsOf: blocked), contents)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(panel.callCount, 1)
     }
 
     func testCancelledFallbackReportsCancellation() throws {

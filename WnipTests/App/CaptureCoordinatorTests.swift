@@ -473,6 +473,23 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(windowHotKey.shortcut, .defaultWindowCapture)
     }
 
+    func testSelectingAndClearingSaveDirectoryUpdatesBothPreferences() throws {
+        let preferences = PreferencesFake()
+        let coordinator = makeCoordinator(permissionGranted: true, preferences: preferences)
+        coordinator.start()
+        let directory = FileManager.default.temporaryDirectory
+        coordinator.setSaveDirectory(directory)
+        XCTAssertEqual(coordinator.appPreferences.saveDirectoryPath, directory.standardizedFileURL.path)
+        XCTAssertNotNil(coordinator.appPreferences.saveDirectoryBookmark)
+        XCTAssertEqual(coordinator.appPreferences, try preferences.load())
+
+        coordinator.clearSaveDirectory()
+        XCTAssertNil(coordinator.appPreferences.saveDirectoryPath)
+        XCTAssertNil(coordinator.appPreferences.saveDirectoryBookmark)
+        XCTAssertEqual(coordinator.appPreferences, try preferences.load())
+        XCTAssertNil(coordinator.presentedError)
+    }
+
     func testSaveCallbackUsesRestoredPreferencesAndFrozenImage() async throws {
         let output = RecordingOutput()
         let preferences = PreferencesFake()
@@ -855,7 +872,11 @@ private final class PreferencesFake: PreferencesStoring {
         self.preferences = preferences
     }
 
-    func replaceSaveDirectoryBookmark(for directory: URL) throws {}
+    func replaceSaveDirectoryBookmark(for directory: URL) throws {
+        preferences.saveDirectoryBookmark = try directory.bookmarkData(options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil, relativeTo: nil)
+        preferences.saveDirectoryPath = directory.standardizedFileURL.path
+    }
 }
 
 @MainActor

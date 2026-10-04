@@ -21,6 +21,7 @@ struct AppPreferences: Codable, Equatable, Sendable {
     static let defaultHapticFeedbackEnabled: Bool = false
     var hapticFeedbackEnabled: Bool
     var saveDirectoryBookmark: Data?
+    var saveDirectoryPath: String?
 
     init(
         regionShortcut: HotKeyShortcut = .defaultRegionCapture,
@@ -33,7 +34,8 @@ struct AppPreferences: Codable, Equatable, Sendable {
         completionNotificationEnabled: Bool = AppPreferences.defaultCompletionNotificationEnabled,
         completionSoundEnabled: Bool = AppPreferences.defaultCompletionSoundEnabled,
         hapticFeedbackEnabled: Bool = AppPreferences.defaultHapticFeedbackEnabled,
-        saveDirectoryBookmark: Data? = nil
+        saveDirectoryBookmark: Data? = nil,
+        saveDirectoryPath: String? = nil
     ) {
         self.regionShortcut = regionShortcut
         self.windowShortcut = windowShortcut
@@ -46,6 +48,30 @@ struct AppPreferences: Codable, Equatable, Sendable {
         self.completionSoundEnabled = completionSoundEnabled
         self.hapticFeedbackEnabled = hapticFeedbackEnabled
         self.saveDirectoryBookmark = saveDirectoryBookmark
+        self.saveDirectoryPath = saveDirectoryPath
+    }
+
+    /// The chosen path is stable even if Finder moves the directory to Trash.
+    /// Reuse the security-scoped URL only while it still points to that path.
+    var saveDirectoryURL: URL? {
+        let storedPath = saveDirectoryPath ?? saveDirectoryBookmark.flatMap {
+            URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: $0)?.path
+        }
+        let originalDirectory = storedPath.flatMap { path in
+            path.hasPrefix("/") ? URL(fileURLWithPath: path, isDirectory: true) : nil
+        }
+        var isStale = false
+        if let bookmark = saveDirectoryBookmark,
+           let resolved = try? URL(resolvingBookmarkData: bookmark,
+                                   options: [.withSecurityScope, .withoutUI],
+                                   relativeTo: nil, bookmarkDataIsStale: &isStale) {
+            if let originalDirectory,
+               originalDirectory.resolvingSymlinksInPath() != resolved.resolvingSymlinksInPath() {
+                return originalDirectory
+            }
+            return resolved
+        }
+        return originalDirectory
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -61,6 +87,7 @@ struct AppPreferences: Codable, Equatable, Sendable {
         case completionSoundEnabled
         case hapticFeedbackEnabled
         case saveDirectoryBookmark
+        case saveDirectoryPath
     }
 
     init(from decoder: any Decoder) throws {
@@ -89,6 +116,7 @@ struct AppPreferences: Codable, Equatable, Sendable {
         completionSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .completionSoundEnabled) ?? Self.defaultCompletionSoundEnabled
         hapticFeedbackEnabled = try container.decodeIfPresent(Bool.self, forKey: .hapticFeedbackEnabled) ?? Self.defaultHapticFeedbackEnabled
         saveDirectoryBookmark = try container.decodeIfPresent(Data.self, forKey: .saveDirectoryBookmark)
+        saveDirectoryPath = try container.decodeIfPresent(String.self, forKey: .saveDirectoryPath)
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -104,6 +132,7 @@ struct AppPreferences: Codable, Equatable, Sendable {
         try container.encode(completionSoundEnabled, forKey: .completionSoundEnabled)
         try container.encode(hapticFeedbackEnabled, forKey: .hapticFeedbackEnabled)
         try container.encodeIfPresent(saveDirectoryBookmark, forKey: .saveDirectoryBookmark)
+        try container.encodeIfPresent(saveDirectoryPath, forKey: .saveDirectoryPath)
     }
 }
 
@@ -157,6 +186,7 @@ final class PreferencesStore: PreferencesStoring {
         )
         var preferences = try load()
         preferences.saveDirectoryBookmark = bookmark
+        preferences.saveDirectoryPath = directory.standardizedFileURL.path
         try save(preferences)
     }
 }

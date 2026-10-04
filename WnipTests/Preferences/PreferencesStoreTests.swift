@@ -47,7 +47,8 @@ final class PreferencesStoreTests: XCTestCase {
             windowShortcut: HotKeyShortcut(keyCode: 13, modifiers: 35),
             filenameRule: "Shot-yyyy",
             jpegQuality: 0.42,
-            saveDirectoryBookmark: Data([0xA, 0xB])
+            saveDirectoryBookmark: Data([0xA, 0xB]),
+            saveDirectoryPath: "/tmp/Wnip Tests/Screenshots"
         )
 
         try PreferencesStore(defaults: defaults).save(preferences)
@@ -106,6 +107,7 @@ final class PreferencesStoreTests: XCTestCase {
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         )
+        XCTAssertEqual(try store.load().saveDirectoryPath, replacementDirectory.standardizedFileURL.path)
         XCTAssertFalse(isStale)
         XCTAssertEqual(resolvedDirectory.standardizedFileURL, replacementDirectory.standardizedFileURL)
     }
