@@ -783,10 +783,8 @@ struct AnnotationParameterControls: View {
             .buttonStyle(.plain)
             .help("Select and Move")
 
-            ColorPicker("Color", selection: colorBinding, supportsOpacity: true)
-                .labelsHidden()
-                .frame(width: 28)
-                .disabled(model.selectedTool == .mosaic)
+            OverlayColorPicker(color: colorBinding, isEnabled: model.selectedTool != .mosaic)
+                .frame(width: 28, height: 28)
 
             if model.selectedTool.usesLineWidth {
                 Image(systemName: "lineweight")

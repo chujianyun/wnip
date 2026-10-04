@@ -94,6 +94,7 @@ final class OverlayController: OverlayControlling {
     private var presentation: OverlayPresentation?
     private var callbacks = OverlayCallbacks()
     private var eventMonitor: Any?
+    private var savedColorPanelLevel: NSWindow.Level?
     private let visibleFrameProvider: @MainActor (DisplayDescriptor) -> CGRect
 
     init(
@@ -111,6 +112,7 @@ final class OverlayController: OverlayControlling {
         self.callbacks = callbacks
         installEventMonitor()
         reconcileWindows(for: presentation)
+        floatColorPanelAboveOverlay()
         NSApp.activate(ignoringOtherApps: true)
         makeActivePanelKey()
     }
@@ -126,6 +128,8 @@ final class OverlayController: OverlayControlling {
     }
 
     func dismissAll() {
+        restoreColorPanelLevel()
+
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
             self.eventMonitor = nil
@@ -348,6 +352,24 @@ final class OverlayController: OverlayControlling {
         if let activeID {
             windows[activeID]?.makeKeyAndOrderFront(nil)
         }
+    }
+
+    // The shared NSColorPanel defaults to the floating level (3), far below the
+    // screenSaver-level (1000) overlay, so the picker's panel stays hidden behind
+    // the fullscreen capture window until the overlay closes. Float it above the
+    // overlay for the capture session and restore it afterwards.
+    private func floatColorPanelAboveOverlay() {
+        let panel = NSColorPanel.shared
+        if savedColorPanelLevel == nil {
+            savedColorPanelLevel = panel.level
+        }
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+    }
+
+    private func restoreColorPanelLevel() {
+        guard let saved = savedColorPanelLevel else { return }
+        NSColorPanel.shared.level = saved
+        savedColorPanelLevel = nil
     }
 
 }
