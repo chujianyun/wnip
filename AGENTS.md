@@ -26,6 +26,7 @@
 
 ## macOS 应用安装与运行验证
 
+- 每次新增或修改功能后，必须运行 `macos-delivery-gate` skill，按其要求完成 macOS 应用交付检查；该检查属于必需的交付步骤，不得跳过。
 - Wnip 的唯一安装位置必须是 `/Applications/Wnip.app`；不得安装到 `~/Applications`、DerivedData、工作树或其他路径。
 - 每次安装前必须先终止所有 Wnip 进程，并确认没有残留进程；不得在 Wnip 运行时覆盖应用包。
 - 必须用本次构建的产物完整替换 `/Applications/Wnip.app`，不得保留或启动旧安装副本。

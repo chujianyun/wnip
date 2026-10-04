@@ -16,10 +16,11 @@ enum OverlayToolbarAction: String, CaseIterable, Equatable, Sendable {
     case save
     case pin
     case background
+    case preview
 }
 
 struct AnnotationToolbar: View {
-    static let preferredSize = CGSize(width: 556, height: 50)
+    static let preferredSize = CGSize(width: 591, height: 50)
 
     @ObservedObject var model: AnnotationCanvasModel
     let addingBackground: Bool
@@ -56,6 +57,7 @@ struct AnnotationToolbar: View {
                 toolButton(.background, systemImage: "photo.badge.plus")
                 toolButton(.pin, systemImage: "pin")
                 toolButton(.copy, systemImage: "doc.on.doc")
+                toolButton(.preview, systemImage: "doc.text.image")
                 toolButton(.save, systemImage: "square.and.arrow.down")
             }
         }
@@ -104,7 +106,7 @@ private extension OverlayToolbarAction {
         case .text: .text
         case .highlight: .highlight
         case .step: .step
-        case .undo, .cancel, .copy, .save, .pin, .background: nil
+        case .undo, .cancel, .copy, .save, .pin, .background, .preview: nil
         }
     }
 
@@ -124,6 +126,7 @@ private extension OverlayToolbarAction {
         case .copy: "Copy"
         case .save: "Save"
         case .background: "添加背景"
+        case .preview: "在预览中打开"
         case .pin: "Pin Screenshot (⌘⇧P)"
         }
     }

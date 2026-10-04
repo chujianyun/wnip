@@ -41,12 +41,20 @@ final class OverlayControllerTests: XCTestCase {
             isVisible: true, isOnScreen: true, isDesktopElement: false)
         view.onWindowSelected(display.id, window)
         view.onToolbarAction(.copy)
+        XCTAssertTrue(copies.isEmpty, "Do not export the desktop while the window capture is pending")
+        var ready = view.viewModel.presentation
+        ready.selectedWindow = window
+        ready.selection = SelectionModel(rect: window.frame)
+        ready.activeDisplayID = display.id
+        ready.showsToolbar = true
+        controller.update(ready)
+        view.onToolbarAction(.copy)
         XCTAssertEqual(copies.count, 1)
         XCTAssertEqual(copies.first?.selectedWindow, window)
         XCTAssertEqual(copies.first?.selection.rect, window.frame)
     }
 
-    func testSelectingWindowLocksSelectionAndShowsToolbar() throws {
+    func testWindowSelectionWaitsForIsolatedSourceBeforeShowingToolbar() throws {
         let (controller, view) = try makeWindowOverlay()
         defer { controller.dismissAll() }
         let display = view.viewModel.display
@@ -57,6 +65,13 @@ final class OverlayControllerTests: XCTestCase {
         )
 
         view.onWindowSelected(display.id, target)
+        XCTAssertFalse(view.viewModel.presentation.showsToolbar)
+        var ready = view.viewModel.presentation
+        ready.selectedWindow = target
+        ready.selection = SelectionModel(rect: target.frame)
+        ready.activeDisplayID = display.id
+        ready.showsToolbar = true
+        controller.update(ready)
 
         XCTAssertTrue(view.viewModel.presentation.showsToolbar)
         XCTAssertEqual(view.viewModel.presentation.selection.rect, target.frame)
@@ -152,6 +167,22 @@ final class OverlayControllerTests: XCTestCase {
         let next = try overlayView(displayID: display.id)
         XCTAssertFalse(next.viewModel.isAnnotating)
         XCTAssertTrue(next.viewModel.annotationModel.document.annotations.isEmpty)
+    }
+
+    func testUpdatingCapturedSourceRefreshesPreviewImage() throws {
+        let (controller, view) = try makeWindowOverlay()
+        defer { controller.dismissAll() }
+        let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 2,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(NSColor.red.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        var ready = view.viewModel.presentation
+        ready.sourceImages[view.viewModel.display.id] = PixelImage(image: try XCTUnwrap(context.makeImage()), scale: 1)
+        XCTAssertNil(view.viewModel.sourceImage)
+        controller.update(ready)
+        XCTAssertNotNil(view.viewModel.sourceImage)
+        XCTAssertEqual(view.viewModel.sourceImage?.size, view.viewModel.display.frame.size)
     }
 
     private func makeWindowOverlay(mode: CaptureMode = .window) throws -> (OverlayController, CaptureOverlayView) {

@@ -45,8 +45,7 @@ struct CaptureContent: Sendable {
     }
 }
 
-/// Applies Wnip's window-target policy without reordering ScreenCaptureKit's
-/// front-to-back window sequence.
+/// Applies Wnip's window-target policy without changing the supplied z-order.
 struct ShareableContentFilter {
     let ownBundleIdentifier: String?
 
@@ -78,5 +77,14 @@ private extension CGRect {
             size.height.isFinite &&
             size.width > 0 &&
             size.height > 0
+    }
+}
+
+/// ScreenCaptureKit exposes available windows, not a guaranteed stacking order.
+/// Only offer windows present in the WindowServer's on-screen snapshot.
+enum WindowStack {
+    static func ordered(_ windows: [CaptureCandidateWindow], frontToBackIDs: [UInt32]) -> [CaptureCandidateWindow] {
+        let candidates = Dictionary(windows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return frontToBackIDs.compactMap { candidates[$0] }
     }
 }

@@ -213,7 +213,16 @@ struct ScreenshotImageRenderer: ImageRendering {
         context.saveGState()
         context.translateBy(x: 0, y: canvasHeight)
         context.scaleBy(x: 1, y: -1)
-        context.draw(image, in: destinationRect)
+        // Flipping the context also changes the destination's origin. Convert
+        // its top-left position to bottom-left coordinates so cropped exports
+        // sample the same source rows as the editor's full-image mosaic.
+        let imageRect = CGRect(
+            x: destinationRect.minX,
+            y: canvasHeight - destinationRect.maxY,
+            width: destinationRect.width,
+            height: destinationRect.height
+        )
+        context.draw(image, in: imageRect)
         context.restoreGState()
     }
 

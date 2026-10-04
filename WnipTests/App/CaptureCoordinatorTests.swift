@@ -19,9 +19,12 @@ final class CaptureCoordinatorTests: XCTestCase {
             selection.selection = SelectionModel(rect: mode == .fullScreen
                 ? ScreenCaptureFake.fixture.displays[0].frame : CGRect(x: 10, y: 20, width: 30, height: 40))
             if mode == .window {
-                selection.selectedWindow = CaptureCandidateWindow(id: 7, title: nil, applicationName: nil,
+                let target = CaptureCandidateWindow(id: 7, title: nil, applicationName: nil,
                     bundleIdentifier: "test", frame: selection.selection.rect,
                     isVisible: true, isOnScreen: true, isDesktopElement: false)
+                overlay.callbacks[0].onWindowSelected(1, target)
+                await coordinator.waitForPendingCaptureForTesting()
+                selection = try XCTUnwrap(overlay.updates.last)
             }
             overlay.callbacks[0].onCopy(selection)
             overlay.callbacks[0].onCopy(selection)
@@ -33,10 +36,86 @@ final class CaptureCoordinatorTests: XCTestCase {
             XCTAssertFalse((pasteboard.readObjects(forClasses: [NSImage.self]) ?? []).isEmpty)
             XCTAssertEqual(bitmap.pixelsWide, mode == .window ? 98 : (mode == .region ? 30 : 100))
             XCTAssertEqual(bitmap.pixelsHigh, mode == .window ? 108 : (mode == .region ? 40 : 100))
-            XCTAssertEqual(screen.windowCaptureCount, 0)
+            XCTAssertEqual(screen.windowCaptureCount, mode == .window ? 1 : 0)
             XCTAssertEqual(screen.displayCaptureCount, 1)
             XCTAssertEqual(overlay.dismissAllCallCount, 2)
         }
+    }
+
+    func testWindowSelectionFreezesOnlyTargetPixelsBeforeEditingAndExport() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let screen = ScreenCaptureFake(content: ScreenCaptureFake.fixture)
+        let overlay = OverlayFake()
+        let coordinator = makeCoordinator(permissionGranted: true, screen: screen, overlay: overlay,
+            clipboard: ImageClipboard(pasteboard: pasteboard))
+        coordinator.startCapture(mode: .window)
+        await coordinator.waitForPendingCaptureForTesting()
+        let target = CaptureCandidateWindow(id: 7, title: "Target", applicationName: nil,
+            bundleIdentifier: "test", frame: CGRect(x: 10, y: 20, width: 30, height: 40),
+            isVisible: true, isOnScreen: true, isDesktopElement: false)
+        overlay.callbacks[0].onWindowSelected(1, target)
+        await coordinator.waitForPendingCaptureForTesting()
+
+        XCTAssertEqual(screen.windowCaptureCount, 1)
+        let selection = try XCTUnwrap(overlay.updates.last)
+        XCTAssertTrue(selection.showsToolbar)
+        XCTAssertEqual(selection.selectedWindow, target)
+        let frozen = try XCTUnwrap(selection.sourceImages[1])
+        let bitmap = NSBitmapImageRep(cgImage: frozen.image)
+        let inside = try XCTUnwrap(bitmap.colorAt(x: 20, y: 50)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(inside.redComponent, 0.9)
+        XCTAssertLessThan(inside.blueComponent, 0.1)
+        XCTAssertEqual(bitmap.colorAt(x: 0, y: 0)?.alphaComponent, 0)
+
+        screen.captureError = CaptureFailure.unavailable
+        overlay.callbacks[0].onCopy(selection)
+        await coordinator.waitForPendingCaptureForTesting()
+        let png = try XCTUnwrap(pasteboard.data(forType: .png))
+        let exported = try XCTUnwrap(NSBitmapImageRep(data: png))
+        let center = try XCTUnwrap(exported.colorAt(x: exported.pixelsWide / 2,
+            y: exported.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(center.redComponent, 0.9)
+        XCTAssertLessThan(center.blueComponent, 0.1)
+        XCTAssertEqual(screen.windowCaptureCount, 1, "Export must reuse the captured window")
+    }
+
+    func testFailedWindowCaptureNeverEnablesDesktopExport() async throws {
+        let screen = ScreenCaptureFake(content: ScreenCaptureFake.fixture)
+        let overlay = OverlayFake()
+        let coordinator = makeCoordinator(permissionGranted: true, screen: screen, overlay: overlay)
+        coordinator.startCapture(mode: .window)
+        await coordinator.waitForPendingCaptureForTesting()
+        screen.captureError = CaptureFailure.unavailable
+        let target = CaptureCandidateWindow(id: 7, title: nil, applicationName: nil,
+            bundleIdentifier: "test", frame: CGRect(x: 10, y: 20, width: 30, height: 40),
+            isVisible: true, isOnScreen: true, isDesktopElement: false)
+        overlay.callbacks[0].onWindowSelected(1, target)
+        await coordinator.waitForPendingCaptureForTesting()
+        XCTAssertFalse(try XCTUnwrap(overlay.updates.last).showsToolbar)
+        XCTAssertNotNil(coordinator.presentedError)
+        XCTAssertEqual(overlay.dismissAllCallCount, 2)
+    }
+
+    func testCancelledWindowCaptureCannotReplaceNextSession() async throws {
+        let screen = ScreenCaptureFake(content: ScreenCaptureFake.fixture)
+        let overlay = OverlayFake()
+        let coordinator = makeCoordinator(permissionGranted: true, screen: screen, overlay: overlay)
+        coordinator.startCapture(mode: .window)
+        await coordinator.waitForPendingCaptureForTesting()
+        let target = CaptureCandidateWindow(id: 7, title: nil, applicationName: nil,
+            bundleIdentifier: "test", frame: CGRect(x: 10, y: 20, width: 30, height: 40),
+            isVisible: true, isOnScreen: true, isDesktopElement: false)
+        screen.suspendsWindowCapture = true
+        overlay.callbacks[0].onWindowSelected(1, target)
+        while screen.windowContinuation == nil { await Task.yield() }
+        coordinator.startCapture(mode: .region)
+        await coordinator.waitForPendingCaptureForTesting()
+        screen.windowContinuation?.resume()
+        await Task.yield()
+        XCTAssertEqual(overlay.presentations.last?.mode, .region)
+        XCTAssertFalse(overlay.updates.contains { $0.showsToolbar })
+        XCTAssertNil(coordinator.presentedError)
     }
 
     func testCancelledCopyDoesNotChangeClipboard() async throws {
@@ -628,10 +707,14 @@ private final class ScreenCaptureFake: ScreenCapturing {
     var captureError: Error?
     private(set) var displayCaptureCount = 0
     private(set) var windowCaptureCount = 0
-    private func image() -> PixelImage {
+    var suspendsWindowCapture = false
+    var windowContinuation: CheckedContinuation<Void, Never>?
+    private func image(color: NSColor = .blue) -> PixelImage {
         let context = CGContext(data: nil, width: 100, height: 100, bitsPerComponent: 8,
             bytesPerRow: 400, space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(color.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
         return PixelImage(image: context.makeImage()!, scale: 1)
     }
     static let fixture = CaptureContent(
@@ -669,8 +752,11 @@ private final class ScreenCaptureFake: ScreenCapturing {
 
     func captureWindow(_ window: CaptureCandidateWindow) async throws -> PixelImage {
         windowCaptureCount += 1
+        if suspendsWindowCapture {
+            await withCheckedContinuation { windowContinuation = $0 }
+        }
         if let captureError { throw captureError }
-        return image()
+        return image(color: .red)
     }
 
     func waitUntilFirstRequestSuspends() async {
@@ -700,7 +786,8 @@ private final class OverlayFake: OverlayControlling {
     var pinSelectionCallCount = 0
     func pinSelection() { pinSelectionCallCount += 1 }
 
-    func update(_ presentation: OverlayPresentation) {}
+    private(set) var updates: [OverlayPresentation] = []
+    func update(_ presentation: OverlayPresentation) { updates.append(presentation) }
 
     func dismissAll() {
         dismissAllCallCount += 1

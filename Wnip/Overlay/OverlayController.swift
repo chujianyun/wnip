@@ -68,6 +68,7 @@ struct OverlayPresentation: Equatable, Sendable {
 struct OverlayCallbacks {
     var onCopy: @MainActor (OverlayPresentation) -> Void = { _ in }
     var onSave: @MainActor (OverlayPresentation) -> Void = { _ in }
+    var onPreview: @MainActor (OverlayPresentation) -> Void = { _ in }
     var onPin: @MainActor (OverlayPresentation) -> Void = { _ in }
     var onCancel: @MainActor () -> Void = {}
     var onUndo: @MainActor () -> Void = {}
@@ -212,8 +213,6 @@ final class OverlayController: OverlayControlling {
                 self?.setHoveredWindow(window, activeDisplayID: displayID)
             },
             onWindowSelected: { [weak self] displayID, window in
-                self?.commitSelection(SelectionModel(rect: window.frame), activeDisplayID: displayID)
-                self?.presentation?.selectedWindow = window
                 self?.callbacks.onWindowSelected(displayID, window)
             },
             onDisplaySelected: { [weak self] display in
@@ -291,7 +290,7 @@ final class OverlayController: OverlayControlling {
                 _ = viewModel?.annotationModel.undo()
             }
             callbacks.onUndo()
-        case .copy, .save, .pin, .background:
+        case .copy, .save, .pin, .background, .preview:
             guard var presentation, presentation.showsToolbar,
                   !presentation.selection.rect.isEmpty else { return }
             _ = viewModel?.annotationModel.commitActiveTextInput()
@@ -299,6 +298,7 @@ final class OverlayController: OverlayControlling {
             if action == .background { presentation.addingBackground = true; callbacks.onCopy(presentation) }
             else if action == .copy { callbacks.onCopy(presentation) }
             else if action == .save { callbacks.onSave(presentation) }
+            else if action == .preview { callbacks.onPreview(presentation) }
             else { callbacks.onPin(presentation) }
         default:
             guard presentation?.showsToolbar == true, let viewModel else { return }

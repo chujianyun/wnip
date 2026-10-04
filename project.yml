@@ -16,6 +16,10 @@ targets:
       SUPPORTED_PLATFORMS: macosx
       ENABLE_APP_INTENTS_METADATA_GENERATION: NO
       SWIFT_VERSION: "5.0"
+      CODE_SIGN_STYLE: Manual
+      # Pin the certificate SHA-1; never fall back to ad-hoc or another identity.
+      CODE_SIGN_IDENTITY: DC86852A3142B093C0D6EF89F9978BC63349E0AF
+      DEVELOPMENT_TEAM: 7PXD675DGC
   WnipTests:
     type: bundle.unit-test
     platform: macOS

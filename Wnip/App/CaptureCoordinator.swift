@@ -140,20 +140,60 @@ final class CaptureCoordinator: ObservableObject {
                 case .shortcutFailed?: break
                 default: presentedError = nil
                 }
+                let initialPresentation = presentation
                 overlay.present(
                     presentation,
                     callbacks: OverlayCallbacks(onCopy: { [weak self] selection in
                         self?.copySelection(selection, requestID: currentID)
                     }, onSave: { [weak self] selection in
                         self?.copySelection(selection, requestID: currentID, save: true)
+                    }, onPreview: { [weak self] selection in
+                        self?.copySelection(selection, requestID: currentID, preview: true)
                     }, onPin: { [weak self] selection in
                         self?.copySelection(selection, requestID: currentID, pin: true)
                     }, onCancel: { [weak self] in
                         self?.cancelCapture()
+                    }, onWindowSelected: { [weak self] displayID, window in
+                        self?.selectWindow(window, on: displayID, in: initialPresentation, requestID: currentID)
                     })
                 )
             } catch {
                 guard !Task.isCancelled, currentID == requestID else { return }
+                isCapturing = false
+                if error as? CaptureFailure == .permissionDenied {
+                    presentedError = .permissionDenied(permission.privacySettingsURL)
+                } else {
+                    presentedError = .captureFailed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func selectWindow(_ window: CaptureCandidateWindow, on displayID: UInt32,
+                              in initialPresentation: OverlayPresentation, requestID currentID: Int) {
+        guard currentID == requestID, initialPresentation.mode == .window,
+              let display = initialPresentation.displays.first(where: { $0.id == displayID }) else { return }
+        captureTask?.cancel()
+        var selection = initialPresentation
+        selection.activeDisplayID = displayID
+        selection.hoveredWindowID = window.id
+        selection.selection = SelectionModel(rect: window.frame)
+        // Export stays unavailable until the isolated window pixels are ready.
+        overlay.update(selection)
+        captureTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let image = try await screen.captureWindow(window)
+                guard !Task.isCancelled, currentID == requestID else { return }
+                selection.sourceImages[displayID] = try WindowCaptureSource.canvas(
+                    image, windowFrame: window.frame, display: display)
+                selection.selectedWindow = window
+                selection.hoveredWindowID = nil
+                selection.showsToolbar = true
+                overlay.update(selection)
+            } catch {
+                guard !Task.isCancelled, currentID == requestID else { return }
+                overlay.dismissAll()
                 isCapturing = false
                 if error as? CaptureFailure == .permissionDenied {
                     presentedError = .permissionDenied(permission.privacySettingsURL)
@@ -251,7 +291,7 @@ final class CaptureCoordinator: ObservableObject {
         }
     }
 
-    private func copySelection(_ selection: OverlayPresentation, requestID currentID: Int, save: Bool = false, pin: Bool = false) {
+    private func copySelection(_ selection: OverlayPresentation, requestID currentID: Int, save: Bool = false, pin: Bool = false, preview: Bool = false) {
         guard currentID == requestID, !isCopying, selection.showsToolbar,
               !selection.selection.rect.isEmpty,
               let display = selection.displays.first(where: { $0.id == selection.activeDisplayID }) else { return }
@@ -282,7 +322,10 @@ final class CaptureCoordinator: ObservableObject {
                 }
                 var bookmarkWarning: String?
                 let image = PixelImage(image: rendered, scale: source.scale, colorSpace: source.colorSpace)
-                if pin {
+                if preview {
+                    try await PreviewService().open(rendered)
+                    guard !Task.isCancelled, currentID == requestID else { return }
+                } else if pin {
                     pinnedImages.present(image, near: selection.selection.rect)
                 } else if save {
                     let result = try output.save(rendered, preferences: appPreferences)
@@ -298,7 +341,7 @@ final class CaptureCoordinator: ObservableObject {
                     try clipboard.write(image)
                 }
                 latestScreenshot = (image, selection.selection.rect)
-                if !pin { feedback.perform(save ? .saved : .copied, preferences: appPreferences) }
+                if !pin && !preview { feedback.perform(save ? .saved : .copied, preferences: appPreferences) }
                 isCapturing = false
                 overlay.dismissAll()
                 presentedError = bookmarkWarning.map(CaptureCoordinatorError.saveDirectoryNotRemembered)

@@ -4,6 +4,18 @@ import XCTest
 
 @MainActor
 final class ShareableContentFilterTests: XCTestCase {
+    func testHitTestingUsesWindowServerOrderInsteadOfShareableContentOrder() {
+        let back = candidate(id: 1, title: "Back", frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let front = candidate(id: 2, title: "Front", frame: CGRect(x: 50, y: 50, width: 400, height: 300))
+        let stale = candidate(id: 3, title: "No longer on screen")
+        let ordered = WindowStack.ordered([back, stale, front], frontToBackIDs: [99, 2, 1])
+        XCTAssertEqual(ordered.map(\.id), [2, 1])
+        XCTAssertEqual(OverlayInteractionGeometry.window(at: CGPoint(x: 100, y: 100),
+            candidatesInFrontToBackOrder: ordered)?.id, 2)
+        XCTAssertEqual(OverlayInteractionGeometry.window(at: CGPoint(x: 700, y: 500),
+            candidatesInFrontToBackOrder: ordered)?.id, 1)
+    }
+
     // Removing any of the predicates below must expose a non-capturable window.
     func testFiltersNonCapturableWindowsAndPreservesShareableContentZOrder() {
         let filter = ShareableContentFilter(ownBundleIdentifier: "com.wnip.app")

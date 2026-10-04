@@ -111,9 +111,16 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
     func availableContent() async throws -> CaptureContent {
         let content = try await SCShareableContent.current
         let coordinateMapper = ScreenCaptureCoordinateMapper.current()
+        guard let windowInfo = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            throw ScreenCaptureKitAdapterFailure.unavailable
+        }
+        let orderedIDs = windowInfo.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value }
         return CaptureContent(
             displays: content.displays.map { displayDescriptor(from: $0, coordinateMapper: coordinateMapper) },
-            windows: content.windows.map { candidate(from: $0, coordinateMapper: coordinateMapper) }
+            windows: WindowStack.ordered(
+                content.windows.map { candidate(from: $0, coordinateMapper: coordinateMapper) },
+                frontToBackIDs: orderedIDs)
         )
     }
 
@@ -141,7 +148,7 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
         }
 
         let filter = SCContentFilter(desktopIndependentWindow: window)
-        return try await captureImage(using: filter)
+        return try await captureImage(using: filter, isWindow: true)
     }
 
     private func displayDescriptor(
@@ -176,7 +183,7 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
         )
     }
 
-    private func captureImage(using filter: SCContentFilter) async throws -> PixelImage {
+    private func captureImage(using filter: SCContentFilter, isWindow: Bool = false) async throws -> PixelImage {
         let scale = max(CGFloat(filter.pointPixelScale), 1)
         let contentRect = filter.contentRect
         let width = contentRect.width * scale
@@ -189,6 +196,12 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
         configuration.width = Int(width.rounded(.up))
         configuration.height = Int(height.rounded(.up))
         configuration.showsCursor = false
+        // Window framing is supplied by Wnip after cropping. Keep source pixels
+        // aligned with the selected window frame and exclude attached windows.
+        if isWindow {
+            configuration.ignoreShadowsSingleWindow = true
+            configuration.includeChildWindows = false
+        }
 
         let image: CGImage = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CGImage, Error>) in
             SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) { image, error in

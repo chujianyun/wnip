@@ -6,7 +6,7 @@ final class CaptureOverlayViewModel: ObservableObject {
     @Published private(set) var visibleFrame: CGRect
     let annotationModel = AnnotationCanvasModel()
     @Published var isAnnotating = false
-    let sourceImage: NSImage?
+    @Published private(set) var sourceImage: NSImage?
     @Published var presentation: OverlayPresentation
 
     init(display: DisplayDescriptor, visibleFrame: CGRect, presentation: OverlayPresentation) {
@@ -17,6 +17,9 @@ final class CaptureOverlayViewModel: ObservableObject {
     }
 
     func update(presentation: OverlayPresentation, visibleFrame: CGRect) {
+        if self.presentation.sourceImages[display.id] != presentation.sourceImages[display.id] {
+            sourceImage = presentation.sourceImages[display.id].map { NSImage(cgImage: $0.image, size: display.frame.size) }
+        }
         self.presentation = presentation
         self.visibleFrame = visibleFrame
     }
