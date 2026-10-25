@@ -4,6 +4,33 @@ import XCTest
 
 @MainActor
 final class ShareableContentFilterTests: XCTestCase {
+    func testWindowCaptureIgnoresFullDisplayOverlaysAboveAnApplicationWindow() {
+        let displayFrame = CGRect(x: 1710, y: 27, width: 1920, height: 1080)
+        let application = candidate(id: 1, title: "Application", frame: CGRect(x: 1965, y: 167, width: 1286, height: 869))
+        let overlays = [
+            candidate(id: 2, title: "Recording overlay", frame: displayFrame, windowLayer: 101),
+            candidate(id: 3, title: "Assistant overlay", frame: displayFrame, windowLayer: 3),
+            candidate(id: 4, title: "System overlay", frame: displayFrame, windowLayer: 20)
+        ]
+        let ordered = WindowStack.ordered([application] + overlays, frontToBackIDs: [2, 3, 4, 1])
+        let windows = ShareableContentFilter(ownBundleIdentifier: "com.wnip.app").filter(ordered)
+
+        XCTAssertEqual(OverlayInteractionGeometry.window(
+            at: CGPoint(x: application.frame.midX, y: application.frame.midY),
+            candidatesInFrontToBackOrder: windows)?.id, application.id)
+        XCTAssertNil(OverlayInteractionGeometry.window(
+            at: CGPoint(x: displayFrame.maxX - 10, y: displayFrame.maxY - 10),
+            candidatesInFrontToBackOrder: windows))
+    }
+
+    func testKeepsARealFullScreenApplicationWindowAtTheNormalLayer() {
+        let window = candidate(id: 1, title: "Full screen application",
+            frame: CGRect(x: 1710, y: 27, width: 1920, height: 1080))
+        let windows = ShareableContentFilter(ownBundleIdentifier: "com.wnip.app").filter([window])
+
+        XCTAssertEqual(windows, [window])
+    }
+
     func testHitTestingUsesWindowServerOrderInsteadOfShareableContentOrder() {
         let back = candidate(id: 1, title: "Back", frame: CGRect(x: 0, y: 0, width: 800, height: 600))
         let front = candidate(id: 2, title: "Front", frame: CGRect(x: 50, y: 50, width: 400, height: 300))
@@ -119,7 +146,8 @@ final class ShareableContentFilterTests: XCTestCase {
         frame: CGRect = CGRect(x: 10, y: 10, width: 500, height: 400),
         isVisible: Bool = true,
         isOnScreen: Bool = true,
-        isDesktopElement: Bool = false
+        isDesktopElement: Bool = false,
+        windowLayer: Int = 0
     ) -> CaptureCandidateWindow {
         CaptureCandidateWindow(
             id: id,
@@ -129,7 +157,8 @@ final class ShareableContentFilterTests: XCTestCase {
             frame: frame,
             isVisible: isVisible,
             isOnScreen: isOnScreen,
-            isDesktopElement: isDesktopElement
+            isDesktopElement: isDesktopElement,
+            windowLayer: windowLayer
         )
     }
 }

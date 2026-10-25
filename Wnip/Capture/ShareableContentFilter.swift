@@ -10,6 +10,7 @@ struct CaptureCandidateWindow: Equatable, Sendable {
     let applicationName: String?
     let bundleIdentifier: String?
     let frame: CGRect
+    let windowLayer: Int
     let isVisible: Bool
     let isOnScreen: Bool
     let isDesktopElement: Bool
@@ -22,13 +23,15 @@ struct CaptureCandidateWindow: Equatable, Sendable {
         frame: CGRect,
         isVisible: Bool,
         isOnScreen: Bool,
-        isDesktopElement: Bool
+        isDesktopElement: Bool,
+        windowLayer: Int = 0
     ) {
         self.id = id
         self.title = title
         self.applicationName = applicationName
         self.bundleIdentifier = bundleIdentifier
         self.frame = frame
+        self.windowLayer = windowLayer
         self.isVisible = isVisible
         self.isOnScreen = isOnScreen
         self.isDesktopElement = isDesktopElement
@@ -58,6 +61,10 @@ struct ShareableContentFilter {
             guard window.isVisible,
                   window.isOnScreen,
                   !window.isDesktopElement,
+                  // Floating recording/assistant overlays can cover a display
+                  // while remaining visually transparent. They must not hide
+                  // the normal application windows from rectangle hit testing.
+                  window.windowLayer == 0,
                   window.frame.hasFinitePositiveArea else {
                 return false
             }

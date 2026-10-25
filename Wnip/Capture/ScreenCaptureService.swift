@@ -179,7 +179,8 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
             frame: coordinateMapper.appKitRect(fromQuartzRect: window.frame),
             isVisible: window.isOnScreen,
             isOnScreen: window.isOnScreen,
-            isDesktopElement: window.owningApplication == nil || window.windowLayer < 0
+            isDesktopElement: window.owningApplication == nil || window.windowLayer < 0,
+            windowLayer: window.windowLayer
         )
     }
 
