@@ -194,7 +194,7 @@ private final class ControlledScreenCaptureKitAdapter: ScreenCaptureKitAdapting 
         fatalError("The test should not request an image when no display error was configured.")
     }
 
-    func captureWindow(id: UInt32) async throws -> PixelImage {
+    func captureWindow(id: UInt32) async throws -> WindowCaptureSnapshot {
         fatalError("The test should not request a window image.")
     }
 }

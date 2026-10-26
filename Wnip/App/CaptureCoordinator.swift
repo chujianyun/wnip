@@ -49,6 +49,7 @@ final class CaptureCoordinator: ObservableObject {
     private var requestID = 0
     private var isRecordingShortcut = false
     private var isCopying = false
+    private let frontmostApplication: @MainActor () -> String?
 
     init() {
         permission = PermissionService()
@@ -63,6 +64,7 @@ final class CaptureCoordinator: ObservableObject {
         clipboard = ImageClipboard()
         output = OutputService()
         feedback = CompletionFeedbackService()
+        frontmostApplication = { NSWorkspace.shared.frontmostApplication?.bundleIdentifier }
     }
 
     init(
@@ -77,7 +79,10 @@ final class CaptureCoordinator: ObservableObject {
         feedback: (any CompletionFeedbackServing)? = nil,
         pinHotKey: (any HotKeyRegistering)? = nil,
         pinnedImages: (any PinnedImagePresenting)? = nil,
-        backgroundEditor: (any BackgroundEditorPresenting)? = nil
+        backgroundEditor: (any BackgroundEditorPresenting)? = nil,
+        frontmostApplication: @escaping @MainActor () -> String? = {
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        }
     ) {
         self.permission = permission
         self.screen = screen
@@ -91,6 +96,7 @@ final class CaptureCoordinator: ObservableObject {
         self.clipboard = clipboard ?? ImageClipboard()
         self.output = output ?? OutputService()
         self.feedback = feedback ?? CompletionFeedbackService(notify: { _ in }, playSound: { _ in }, performHaptic: { _ in })
+        self.frontmostApplication = frontmostApplication
     }
 
     func start() {
@@ -107,6 +113,7 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func startCapture(mode: CaptureMode, addingBackground: Bool = false) {
+        let foregroundBundle = frontmostApplication()
         requestID &+= 1
         let currentID = requestID
         captureTask?.cancel()
@@ -130,6 +137,20 @@ final class CaptureCoordinator: ObservableObject {
                 guard !Task.isCancelled, currentID == requestID else { return }
                 var presentation = OverlayPresentation(mode: mode, displays: content.displays, windows: content.windows)
                 presentation.addingBackground = addingBackground
+                // Taking focus closes transient menus and popovers. Freeze the
+                // foreground app's windows before showing the picker; other apps
+                // can still be captured lazily without freezing the whole desktop.
+                var frozenWindows: [UInt32: Result<WindowCaptureSnapshot, Error>] = [:]
+                if mode == .window, let foregroundBundle {
+                    for window in content.windows where window.bundleIdentifier == foregroundBundle {
+                        do {
+                            frozenWindows[window.id] = .success(try await screen.captureWindow(window))
+                        } catch {
+                            frozenWindows[window.id] = .failure(error)
+                        }
+                        guard !Task.isCancelled, currentID == requestID else { return }
+                    }
+                }
                 // Freeze the same source used by both live annotations and export,
                 // before creating any screenshot overlay windows.
                 for display in content.displays {
@@ -142,6 +163,7 @@ final class CaptureCoordinator: ObservableObject {
                 default: presentedError = nil
                 }
                 let initialPresentation = presentation
+                let initialWindows = frozenWindows
                 overlay.present(
                     presentation,
                     callbacks: OverlayCallbacks(onCopy: { [weak self] selection in
@@ -155,7 +177,8 @@ final class CaptureCoordinator: ObservableObject {
                     }, onCancel: { [weak self] in
                         self?.cancelCapture()
                     }, onWindowSelected: { [weak self] displayID, window in
-                        self?.selectWindow(window, on: displayID, in: initialPresentation, requestID: currentID)
+                        self?.selectWindow(window, on: displayID, in: initialPresentation,
+                            frozenWindow: initialWindows[window.id], requestID: currentID)
                     })
                 )
             } catch {
@@ -171,7 +194,8 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     private func selectWindow(_ window: CaptureCandidateWindow, on displayID: UInt32,
-                              in initialPresentation: OverlayPresentation, requestID currentID: Int) {
+                              in initialPresentation: OverlayPresentation,
+                              frozenWindow: Result<WindowCaptureSnapshot, Error>?, requestID currentID: Int) {
         guard currentID == requestID, initialPresentation.mode == .window,
               let display = initialPresentation.displays.first(where: { $0.id == displayID }) else { return }
         captureTask?.cancel()
@@ -184,10 +208,16 @@ final class CaptureCoordinator: ObservableObject {
         captureTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let image = try await screen.captureWindow(window)
+                let snapshot: WindowCaptureSnapshot
+                if let frozenWindow {
+                    snapshot = try frozenWindow.get()
+                } else {
+                    snapshot = try await screen.captureWindow(window)
+                }
                 guard !Task.isCancelled, currentID == requestID else { return }
                 selection.sourceImages[displayID] = try WindowCaptureSource.canvas(
-                    image, windowFrame: window.frame, display: display)
+                    snapshot.image, windowFrame: snapshot.frame, display: display)
+                selection.selection = SelectionModel(rect: snapshot.frame)
                 selection.selectedWindow = window
                 selection.hoveredWindowID = nil
                 selection.showsToolbar = true

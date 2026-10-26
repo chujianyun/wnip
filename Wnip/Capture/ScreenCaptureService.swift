@@ -7,7 +7,7 @@ import ScreenCaptureKit
 protocol ScreenCapturing: AnyObject {
     func availableContent() async throws -> CaptureContent
     func captureDisplay(_ display: DisplayDescriptor, excluding windows: [CaptureCandidateWindow]) async throws -> PixelImage
-    func captureWindow(_ window: CaptureCandidateWindow) async throws -> PixelImage
+    func captureWindow(_ window: CaptureCandidateWindow) async throws -> WindowCaptureSnapshot
 }
 
 /// The narrow boundary lets the service's domain error contract be tested
@@ -16,7 +16,7 @@ protocol ScreenCapturing: AnyObject {
 protocol ScreenCaptureKitAdapting: AnyObject {
     func availableContent() async throws -> CaptureContent
     func captureDisplay(id: UInt32, excludingWindowIDs: [UInt32]) async throws -> PixelImage
-    func captureWindow(id: UInt32) async throws -> PixelImage
+    func captureWindow(id: UInt32) async throws -> WindowCaptureSnapshot
 }
 
 @MainActor
@@ -74,7 +74,7 @@ final class ScreenCaptureService: ScreenCapturing {
         }
     }
 
-    func captureWindow(_ window: CaptureCandidateWindow) async throws -> PixelImage {
+    func captureWindow(_ window: CaptureCandidateWindow) async throws -> WindowCaptureSnapshot {
         do {
             return try await adapter.captureWindow(id: window.id)
         } catch {
@@ -141,14 +141,25 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
         return try await captureImage(using: filter)
     }
 
-    func captureWindow(id: UInt32) async throws -> PixelImage {
+    func captureWindow(id: UInt32) async throws -> WindowCaptureSnapshot {
         let content = try await SCShareableContent.current
         guard let window = content.windows.first(where: { $0.windowID == id }) else {
             throw ScreenCaptureKitAdapterFailure.unavailable
         }
 
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        return try await captureImage(using: filter, isWindow: true)
+        guard let display = content.displays.max(by: {
+            $0.frame.intersection(window.frame).area < $1.frame.intersection(window.frame).area
+        }), display.frame.intersects(window.frame) else {
+            throw ScreenCaptureKitAdapterFailure.unavailable
+        }
+        // Child-window inclusion is supported by display-bound filters. Keep
+        // only this window and its children, never the surrounding desktop.
+        let filter = SCContentFilter(display: display, including: [window])
+        let image = try await captureImage(using: filter, isWindow: true)
+        let mapper = ScreenCaptureCoordinateMapper.current()
+        return try WindowCaptureSource.snapshot(image,
+            windowFrame: mapper.appKitRect(fromQuartzRect: window.frame),
+            display: displayDescriptor(from: display, coordinateMapper: mapper))
     }
 
     private func displayDescriptor(
@@ -197,11 +208,11 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
         configuration.width = Int(width.rounded(.up))
         configuration.height = Int(height.rounded(.up))
         configuration.showsCursor = false
-        // Window framing is supplied by Wnip after cropping. Keep source pixels
-        // aligned with the selected window frame and exclude attached windows.
+        // Wnip supplies its own shadow after trimming the isolated window group.
         if isWindow {
-            configuration.ignoreShadowsSingleWindow = true
-            configuration.includeChildWindows = false
+            configuration.sourceRect = contentRect
+            configuration.ignoreShadowsDisplay = true
+            configuration.includeChildWindows = true
         }
 
         let image: CGImage = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CGImage, Error>) in
@@ -217,6 +228,10 @@ final class ScreenCaptureKitAdapter: ScreenCaptureKitAdapting {
         }
         return PixelImage(image: image, scale: scale, colorSpace: image.colorSpace)
     }
+}
+
+private extension CGRect {
+    var area: CGFloat { isNull ? 0 : width * height }
 }
 
 private enum ScreenCaptureKitAdapterFailure: Error, Equatable {
